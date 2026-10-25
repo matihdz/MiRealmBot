@@ -10,6 +10,8 @@ class AutoAimSettings:
     extrapolation: float = 302.0
     mouse_radius: float = 4.0
     activation: str = "autofire"
+    prioritize_bosses: bool = False
+    ignore_walls: bool = False
 
 
 def parse_autoaim(data: object = None) -> AutoAimSettings:
@@ -17,9 +19,13 @@ def parse_autoaim(data: object = None) -> AutoAimSettings:
         return AutoAimSettings()
     if not isinstance(data, dict):
         raise ValueError("autoaim debe contener un objeto JSON")
-    enabled = data.get("enabled", False)
-    if not isinstance(enabled, bool):
-        raise ValueError("AutoAim activado debe ser true o false")
+    toggles = {}
+    for field, label in (("enabled", "AutoAim activado"), ("prioritize_bosses", "Priorizar bosses"),
+                          ("ignore_walls", "Ignorar murallas")):
+        value = data.get(field, False)
+        if not isinstance(value, bool):
+            raise ValueError(f"{label} debe ser true o false")
+        toggles[field] = value
     if data.get("mode", "close_to_mouse") != "close_to_mouse":
         raise ValueError("El único modo de AutoAim disponible es Close to Mouse")
     if data.get("activation", "autofire") != "autofire":
@@ -37,7 +43,7 @@ def parse_autoaim(data: object = None) -> AutoAimSettings:
         if not math.isfinite(value) or value < 0 or (positive and value == 0):
             raise ValueError(f"{field} debe ser {'positivo' if positive else 'no negativo'} y finito")
         numbers[field] = value
-    return AutoAimSettings(enabled=enabled, **numbers)
+    return AutoAimSettings(**toggles, **numbers)
 
 
 def autoaim_mapping(settings: AutoAimSettings) -> dict:

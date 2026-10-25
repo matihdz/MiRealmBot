@@ -6,6 +6,8 @@
   "detect_game_keys": true,
   "autoaim": {
     "enabled": false,
+    "prioritize_bosses": false,
+    "ignore_walls": false,
     "mode": "close_to_mouse",
     "activation": "autofire",
     "extrapolation": 302.0,

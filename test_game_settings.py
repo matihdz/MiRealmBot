@@ -31,6 +31,25 @@ class BindingTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 parse_autoaim(invalid)
 
+    def test_target_filters_default_off_and_round_trip_independent_explicit_booleans(self):
+        self.assertFalse(parse_autoaim().prioritize_bosses)
+        self.assertFalse(parse_autoaim().ignore_walls)
+        for bosses in (False, True):
+            for walls in (False, True):
+                with self.subTest(bosses=bosses, walls=walls):
+                    config = config_from_mapping({"autoaim": {"prioritize_bosses": bosses,
+                                                               "ignore_walls": walls}})
+                    self.assertIs(config.autoaim.prioritize_bosses, bosses)
+                    self.assertIs(config.autoaim.ignore_walls, walls)
+                    mapping = config_to_mapping(config)
+                    self.assertIs(mapping["autoaim"]["prioritize_bosses"], bosses)
+                    self.assertIs(mapping["autoaim"]["ignore_walls"], walls)
+                    self.assertEqual(config_from_mapping(mapping), config)
+        for field in ("prioritize_bosses", "ignore_walls"):
+            for invalid in (0, 1, None, "false", [], {}):
+                with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
+                    parse_autoaim({field: invalid})
+
     def test_runtime_auto_key_waits_for_current_supported_binding_and_keeps_manual_explicit(self):
         config = config_from_mapping({"detect_game_keys": True, "autoaim": {"enabled": True}})
         self.assertEqual(config_from_mapping(config_to_mapping(config)), config)

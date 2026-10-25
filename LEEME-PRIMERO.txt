@@ -1,4 +1,4 @@
-MiRealmBot 0.2.0 - Inicio rápido
+MiRealmBot 0.2.1 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
@@ -25,6 +25,10 @@ IMPORTANTE PARA USARLO
 - Pulsa Detener para cerrar la sesión o cambiar parámetros.
 
 AUTOAIM OPCIONAL
+- Priorizar bosses: elige primero al boss marcado por el juego dentro del radio.
+  Entre varios bosses elige el más cercano; sin boss, mantiene la selección normal.
+- Ignorar murallas: excluye las murallas como objetivos del AutoAim.
+- Son opciones independientes y empiezan desmarcadas.
 - Con la sesión detenida, abre AutoAim y marca "Activar AutoAim".
 - El modo Close to Mouse elige un enemigo cercano al cursor.
 - Para empezar, deja Extrapolation en 302 y Radio junto al cursor en 4.

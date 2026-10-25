@@ -3,17 +3,23 @@
 // Only Close to Mouse is supported. Extrapolation is the original numerical
 // coefficient: predicted position = position + coefficient * movement vector.
 // Its time unit has not been established; it is deliberately not labelled ms.
-function chooseAutoAimTarget(candidates, cursor, radius, extrapolation) {
+function chooseAutoAimTarget(candidates, cursor, radius, extrapolation, prioritizeBosses = false, ignoreWalls = false) {
     if (![cursor.x, cursor.y, radius, extrapolation].every(Number.isFinite) ||
-        radius <= 0 || extrapolation < 0) return null;
+        radius <= 0 || extrapolation < 0 || typeof prioritizeBosses !== 'boolean' ||
+        typeof ignoreWalls !== 'boolean') return null;
     let chosen = null;
-    let best = radius * radius;
+    const radiusSquared = radius * radius;
+    let best = radiusSquared;
+    let bestPriority = -1;
     for (const candidate of candidates) {
         if (!candidate.eligible || ![candidate.x, candidate.y].every(Number.isFinite)) continue;
+        if (ignoreWalls && candidate.is_wall === true) continue;
         const dx = candidate.x - cursor.x;
         const dy = candidate.y - cursor.y;
         const distance = dx * dx + dy * dy;
-        if (!(distance < best)) continue;
+        const priority = prioritizeBosses && candidate.is_boss === true ? 1 : 0;
+        if (!(distance < radiusSquared) || priority < bestPriority ||
+            (priority === bestPriority && !(distance < best))) continue;
         const vx = extrapolation === 0 ? 0 : candidate.vx;
         const vy = extrapolation === 0 ? 0 : candidate.vy;
         if (![vx, vy].every(Number.isFinite)) continue;
@@ -22,7 +28,10 @@ function chooseAutoAimTarget(candidates, cursor, radius, extrapolation) {
         const y = Math.fround(candidate.y + Math.fround(factor * vy));
         if (![x, y].every(Number.isFinite)) continue;
         best = distance;
+        bestPriority = priority;
         chosen = { id: candidate.id, x, y, source_x: candidate.x, source_y: candidate.y,
+            is_boss: typeof candidate.is_boss === 'boolean' ? candidate.is_boss : null,
+            is_wall: typeof candidate.is_wall === 'boolean' ? candidate.is_wall : null,
             mouse_distance: Math.sqrt(distance) };
     }
     return chosen;
@@ -33,6 +42,8 @@ function createAutoAimBridge(context) {
         validObject, ownedHooks, options, isRunning, getAssociation, playerClass, worldClass } = context;
     if (options.mode !== 'close_to_mouse' || options.activation !== 'autofire' ||
         typeof options.enabled !== 'boolean' || typeof options.active !== 'boolean' ||
+        typeof options.prioritize_bosses !== 'boolean' ||
+        typeof options.ignore_walls !== 'boolean' ||
         !Number.isFinite(options.extrapolation) || options.extrapolation < 0 ||
         !Number.isFinite(options.mouse_radius) || options.mouse_radius <= 0) {
         throw Error('Invalid Close to Mouse options.');
@@ -43,6 +54,8 @@ function createAutoAimBridge(context) {
     const entityClass = resolve('Assembly-CSharp.dll', '', 'KJMONHENJEN');
     const livingClass = resolve('Assembly-CSharp.dll', '', 'LKHPPBEGNOM');
     const propertiesClass = resolve('Assembly-CSharp.dll', 'DecaGames.RotMG.Objects.Map.Data', 'ObjectProperties');
+    const bossMarkerClass = resolve('Assembly-CSharp.dll', 'DecaGames.RotMG.Objects.Map.Data', 'HealthBarBoss');
+    const entityKindClass = resolve('Assembly-CSharp.dll', '', 'FDCIMDHOOCB');
     const fields = {
         playerInput: instanceField(playerClass, 'BOGNJLHEBGL', 'DecaGames.RotMG.Managers.Options.InputManager', 0x620),
         inputWorld: instanceField(inputClass, 'EFAGNJBDCOM', 'HJMBOMEHGDJ', 0x28),
@@ -54,8 +67,11 @@ function createAutoAimBridge(context) {
         x: instanceField(entityClass, 'CLFEOFKBNEJ', 'System.Single', 0x3c),
         y: instanceField(entityClass, 'PKEECFNFEIO', 'System.Single', 0x40),
         id: instanceField(entityClass, 'FAEMCAEIPMP', 'System.Int32', 0x4c),
+        kind: instanceField(entityClass, 'JIPGLAPHDCL', 'FDCIMDHOOCB', 0xbc),
         properties: instanceField(entityClass, 'OBAKMCCDBJA', 'DecaGames.RotMG.Objects.Map.Data.ObjectProperties', 0x18),
         hostile: instanceField(propertiesClass, 'isEnemy', 'System.Boolean', 0x6e1),
+        bossMarker: instanceField(propertiesClass, 'HealthBarBossElement',
+            'DecaGames.RotMG.Objects.Map.Data.HealthBarBoss', 0x488),
         damageable: instanceField(propertiesClass, 'MaxHitPointsElement', 'DecaGames.RotMG.Objects.Map.Data.MaxHitPoints', 0x368),
         health: instanceField(livingClass, 'ABCPKBGJPEP', 'System.Int32', 0x20c),
         conditions: instanceField(livingClass, 'COHCKAPOLCA', 'System.Int32[]', 0x250),
@@ -72,6 +88,27 @@ function createAutoAimBridge(context) {
         'pointer', ['pointer'], { abi: 'win64' });
     const valueSize = new NativeFunction(module.getExportByName('il2cpp_class_value_size'),
         'int32', ['pointer', 'pointer'], { abi: 'win64' });
+    const readEnumLiteral = new NativeFunction(module.getExportByName('il2cpp_field_static_get_value'),
+        'void', ['pointer', 'pointer'], { abi: 'win64' });
+    const wallClasses = { CaveWall: 5, ConnectedWall: 11, Wall: 34, DoubleWall: 36 };
+    const wallKinds = new Set();
+    const knownKinds = new Set();
+    const kindIterator = Memory.alloc(Process.pointerSize); kindIterator.writePointer(ptr(0));
+    const kindValue = Memory.alloc(4);
+    for (;;) {
+        const field = api.class_get_fields(entityKindClass, kindIterator);
+        if (field.isNull()) break;
+        if ((api.field_get_flags(field) & 0x50) !== 0x50) continue;
+        const name = api.field_get_name(field).readUtf8String();
+        readEnumLiteral(field, kindValue);
+        const value = kindValue.readS32();
+        knownKinds.add(value);
+        if (Object.prototype.hasOwnProperty.call(wallClasses, name)) {
+            if (wallClasses[name] !== value) throw Error('Unsupported wall entity enum: ' + name);
+            wallKinds.add(value);
+        }
+    }
+    if (wallKinds.size !== Object.keys(wallClasses).length) throw Error('Missing wall entity enum metadata.');
     const user32 = Process.getModuleByName('user32.dll');
     const foregroundWindow = new NativeFunction(user32.getExportByName('GetForegroundWindow'),
         'pointer', [], { abi: 'win64' });
@@ -181,7 +218,15 @@ function createAutoAimBridge(context) {
             if (conditions.isNull() || conditions.add(0x18).readU64().toNumber() < 1) continue;
             const mask = conditions.add(0x20).readU32();
             if ((mask & ((1 << 21) | (1 << 23) | (1 << 24))) !== 0) continue;
+            // This is the game's explicit <HealthBarBoss> description marker.
+            // An absent marker does not prove an enemy is never called a boss;
+            // it means it is outside this classifier's documented marker scope.
+            const marker = properties.add(fields.bossMarker.offset).readPointer();
+            const isBoss = marker.isNull() ? false : validObject(marker, bossMarkerClass) ? true : null;
+            const kind = entity.add(fields.kind.offset).readS32();
             result.push({ eligible: true, id: entity.add(fields.id.offset).readS32(),
+                is_boss: isBoss,
+                is_wall: knownKinds.has(kind) ? wallKinds.has(kind) : null,
                 x: entity.add(fields.x.offset).readFloat(), y: entity.add(fields.y.offset).readFloat(),
                 vx: entity.add(fields.velocity.offset).readFloat(),
                 vy: entity.add(fields.velocity.offset + 4).readFloat() });
@@ -252,7 +297,7 @@ function createAutoAimBridge(context) {
                     const cursor = { x: projection.buffer.readFloat(), y: -projection.buffer.add(4).readFloat() };
                     const observedCandidates = candidates(observed.association.world, observed.association.player);
                     const chosen = chooseAutoAimTarget(observedCandidates, cursor,
-                        options.mouse_radius, options.extrapolation);
+                        options.mouse_radius, options.extrapolation, options.prioritize_bosses, options.ignore_walls);
                     state.autofire = true; state.paused = false; state.foreground = true;
                     state.target = chosen; state.candidates = observedCandidates.length;
                     state.angle = chosen === null ? null : Math.atan2(
@@ -274,6 +319,21 @@ function createAutoAimBridge(context) {
     }
     return { install, capture, invalidate,
         bindings: { fields, dispatch, camera, code_guards: guards,
+            boss_classification: {
+                source: 'health_bar_boss_marker', field: 'ObjectProperties.HealthBarBossElement',
+                present: 'Typed HealthBarBoss description from the game is present.',
+                absent: 'No boss health-bar marker; this does not establish that the enemy is not a boss.',
+                unknown: 'A non-null description could not be verified as HealthBarBoss.',
+                excludes_heuristics: ['maximum HP', 'size', 'Quest flag', 'God flag', 'name matching']
+            },
+            wall_classification: {
+                source: 'game_entity_class', field: 'KJMONHENJEN.JIPGLAPHDCL',
+                enum_type: 'FDCIMDHOOCB', wall_classes: wallClasses,
+                verification: 'Literal enum names and values checked against live metadata before use.',
+                unknown: 'An entity kind absent from the observed enum remains unclassified.',
+                scope: 'Wall, CaveWall, ConnectedWall and DoubleWall targets only; collision and projectiles are untouched.',
+                excludes_heuristics: ['FullOccupy', 'Static', 'BlockProjectiles', 'maximum HP', 'name matching']
+            },
             source: 'Native autofire dispatch camera projection; exact local-player and call-site association.',
             extrapolation_unit: 'original coefficient; no time unit asserted',
             writes: options.enabled && options.active ? 'Scoped camera return stack x/y only' : 'none',
@@ -296,10 +356,14 @@ function createAutoAimBridge(context) {
             else status = options.active ? 'Apuntando al enemigo junto al cursor' : 'Objetivo detectado; sólo observación';
             return { enabled: options.enabled, active: options.active, mode: options.mode,
                 activation: options.activation, extrapolation: options.extrapolation,
+                prioritize_bosses: options.prioritize_bosses,
+                ignore_walls: options.ignore_walls,
                 mouse_radius: options.mouse_radius, error, status,
                 autofire: latest ? state.autofire : null, paused: latest ? state.paused : null,
                 foreground: latest && state.foreground, target: latest ? state.target : null,
                 target_id: latest && state.target !== null ? state.target.id : null,
+                target_is_boss: latest && state.target !== null ? state.target.is_boss : null,
+                target_is_wall: latest && state.target !== null ? state.target.is_wall : null,
                 angle: latest ? state.angle : null,
                 candidates: latest ? state.candidates : 0, projections: state.projections,
                 redirects: state.redirects,

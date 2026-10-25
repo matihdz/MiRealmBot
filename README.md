@@ -34,6 +34,10 @@ En **AutoAim**, marca **Activar AutoAim** y usa el modo **Activo** de la sesión
 
 **Extrapolation** empieza en **302**. Con 0 apunta a la posición actual; valores mayores adelantan más según el movimiento del enemigo. Es un coeficiente de la fórmula investigada, cuya unidad temporal no está confirmada. **Radio junto al cursor** empieza en **4 unidades del mundo del juego**.
 
+Desde **0.2.1**, **Priorizar bosses** elige primero un boss reconocido dentro del radio del cursor. Entre varios bosses elige el más cercano al cursor; sin uno, mantiene la selección normal. Se basa en el marcador de boss del juego: un jefe sin ese marcador conserva el tratamiento normal.
+
+**Ignorar murallas** excluye las clases de muralla del juego como objetivos, incluidas las destructibles. Ambas opciones son independientes y empiezan desmarcadas. Detén la sesión, marca las que quieras, guarda e inicia de nuevo.
+
 El puente ajusta el punto de puntería utilizado por la ruta investigada de disparos de proyectil. No mueve el cursor, activa autofire ni inicia ataques por sí mismo. La prueba activa del perfil actual registró selección de enemigos y ajustes de puntería, y el usuario confirmó que apunta correctamente. Quedan por medir la precisión y el funcionamiento en otro equipo.
 
 ## Actualizar

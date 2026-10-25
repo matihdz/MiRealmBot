@@ -165,6 +165,8 @@ class App:
         self.detect_keys_var = tk.BooleanVar(root, self.live_mapping.get("detect_game_keys", True))
         aim = self.live_mapping["autoaim"]
         self.aim_enabled_var = tk.BooleanVar(root, aim["enabled"])
+        self.prioritize_bosses_var = tk.BooleanVar(root, aim["prioritize_bosses"])
+        self.ignore_walls_var = tk.BooleanVar(root, aim["ignore_walls"])
         self.extrapolation_var = tk.StringVar(root, f"{aim['extrapolation']:g}")
         self.aim_radius_var = tk.StringVar(root, f"{aim['mouse_radius']:g}")
         self.bindings_var = tk.StringVar(root, "Todavía no se han leído las teclas del juego.")
@@ -492,9 +494,17 @@ class App:
         controls = ttk.Frame(p, style="Panel.TFrame", padding=18)
         controls.grid(row=2, column=0, sticky="ew")
         controls.columnconfigure(1, weight=1)
-        self.aim_enabled_check = ttk.Checkbutton(controls, text="Activar AutoAim",
+        options = ttk.Frame(controls, style="Panel.TFrame")
+        options.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.aim_enabled_check = ttk.Checkbutton(options, text="Activar AutoAim",
                                                 variable=self.aim_enabled_var)
-        self.aim_enabled_check.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.aim_enabled_check.pack(side="left", padx=(0, 14))
+        self.prioritize_bosses_check = ttk.Checkbutton(options, text="Priorizar bosses",
+                                                      variable=self.prioritize_bosses_var)
+        self.prioritize_bosses_check.pack(side="left", padx=(0, 14))
+        self.ignore_walls_check = ttk.Checkbutton(options, text="Ignorar murallas",
+                                                 variable=self.ignore_walls_var)
+        self.ignore_walls_check.pack(side="left")
         self._label(controls, "Modo", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w", pady=8)
         self._label(controls, "Close to Mouse", style="Panel.TLabel").grid(row=1, column=1, sticky="w")
         self._label(controls, "Extrapolation", style="PanelMuted.TLabel").grid(row=2, column=0, sticky="w", pady=8)
@@ -512,6 +522,9 @@ class App:
         self._label(controls, "Con AutoAim habilitado y modo Activo, apunta mientras el autofire del juego está encendido. "
                     "No necesitas mantener una tecla pulsada. Observar calcula sin alterar los disparos.",
                     style="PanelMuted.TLabel", wraplength=680).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self._label(controls, "Prioriza bosses con marcador del juego dentro del radio; sin uno, elige al enemigo más cercano. "
+                    "Ignorar murallas las excluye como objetivos.", style="PanelMuted.TLabel",
+                    wraplength=680, font=("Segoe UI", 9)).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
         bindings = ttk.Frame(p, style="Panel.TFrame", padding=18)
         bindings.grid(row=3, column=0, sticky="ew", pady=(12, 12))
         bindings.columnconfigure(0, weight=1)
@@ -646,7 +659,8 @@ class App:
         for widget in (self.observe_radio, self.active_radio):
             widget.configure(state="normal" if live and not running and not updates and not installing else "disabled")
         self.save_button.configure(state="normal" if live and not running and not updates and not installing else "disabled")
-        for widget in (self.aim_enabled_check, self.extrapolation_input, self.aim_radius_input,
+        for widget in (self.aim_enabled_check, self.prioritize_bosses_check, self.ignore_walls_check,
+                       self.extrapolation_input, self.aim_radius_input,
                        self.detect_keys_check, self.refresh_keys_button):
             widget.configure(state="disabled" if running or installing else "normal")
         for widget in (self.start_button, self.aim_start_button):
@@ -921,7 +935,8 @@ class App:
         data.update(threshold=self.live_draft["threshold_percent"] / 100,
                     prediction_enabled=self.live_draft["prediction_enabled"], nexus_key=self.key_var.get(),
                     detect_game_keys=self.detect_keys_var.get(), autoaim={
-                        "enabled": self.aim_enabled_var.get(), "mode": "close_to_mouse",
+                        "enabled": self.aim_enabled_var.get(), "prioritize_bosses": self.prioritize_bosses_var.get(),
+                        "ignore_walls": self.ignore_walls_var.get(), "mode": "close_to_mouse",
                         "activation": "autofire", "extrapolation": self._aim_number(self.extrapolation_var, "Extrapolation"),
                         "mouse_radius": self._aim_number(self.aim_radius_var, "Radio junto al cursor")})
         # Validate even when text did not become a valid draft.
@@ -1142,6 +1157,8 @@ class App:
                     text = f"{authority} · autofire {fire_text}"
                     if aim.get("target_id") is not None:
                         text += f" · enemigo {aim['target_id']}"
+                        boss = aim.get("target_is_boss")
+                        text += " · " + ("Boss" if boss is True else "Enemigo" if boss is False else "Tipo sin confirmar")
                     if isinstance(aim.get("angle"), (int, float)) and math.isfinite(aim["angle"]):
                         text += f" · ángulo {aim['angle']:.2f}"
                     if aim.get("status"):

@@ -43,4 +43,59 @@ test('Invalid cursor and settings fail without an aim', () => {
         assert.equal(choose([enemy(1, 0, 0)], cursor, radius, scale), null);
     }
 });
+test('Disabled boss priority preserves the closest enemy, even beside a boss', () => {
+    const mob = {...enemy(1, 1, 0), is_boss: false};
+    const boss = {...enemy(2, 3, 0), is_boss: true};
+    assert.equal(choose([mob, boss], {x: 0, y: 0}, 4, 0, false).id, 1);
+});
+test('Enabled boss priority wins over a nearer mob regardless of enumeration order', () => {
+    const mob = {...enemy(1, 1, 0), is_boss: false};
+    const boss = {...enemy(2, 3, 0), is_boss: true};
+    for (const candidates of [[mob, boss], [boss, mob]]) {
+        const selected = choose(candidates, {x: 0, y: 0}, 4, 0, true);
+        assert.equal(selected.id, 2);
+        assert.equal(selected.is_boss, true);
+    }
+});
+test('Several bosses retain Close to Mouse ordering within the boss group', () => {
+    assert.equal(choose([{...enemy(1, 0.1, 0), is_boss: false},
+        {...enemy(2, 3, 0), is_boss: true}, {...enemy(3, 2, 0), is_boss: true}],
+        {x: 0, y: 0}, 4, 0, true).id, 3);
+});
+test('A boss outside the radius or ineligible cannot steal normal targeting', () => {
+    const mob = {...enemy(1, 1, 0), is_boss: false};
+    const invalidBosses = [{...enemy(2, 4, 0), is_boss: true},
+        {...enemy(3, 0, 0), is_boss: true, eligible: false}];
+    const selected = choose([mob, ...invalidBosses], {x: 0, y: 0}, 4, 0, true);
+    assert.equal(selected.id, 1);
+    assert.equal(selected.is_boss, false);
+});
+test('Missing boss evidence stays unknown and does not get boss priority', () => {
+    const selected = choose([enemy(1, 1, 0), {...enemy(2, 2, 0), is_boss: 1}],
+        {x: 0, y: 0}, 4, 0, true);
+    assert.equal(selected.id, 1);
+    assert.equal(selected.is_boss, null);
+});
+test('An unusable boss prediction falls back to a valid enemy without moving the radius', () => {
+    const selected = choose([{...enemy(2, 0, 0, NaN, 0), is_boss: true}, enemy(1, 1, 0)],
+        {x: 0, y: 0}, 4, 302, true);
+    assert.equal(selected.id, 1);
+});
+test('Wall filtering is optional and keeps the old selection when disabled', () => {
+    const wall = {...enemy(1, 0.1, 0), is_wall: true};
+    const mob = {...enemy(2, 1, 0), is_wall: false};
+    assert.equal(choose([wall, mob], {x: 0, y: 0}, 4, 0, false, false).id, 1);
+    assert.equal(choose([wall, mob], {x: 0, y: 0}, 4, 0, false, true).id, 2);
+});
+test('Wall exclusion happens before boss prioritization', () => {
+    const markedWall = {...enemy(1, 0.1, 0), is_wall: true, is_boss: true};
+    const mob = {...enemy(2, 1, 0), is_wall: false, is_boss: false};
+    assert.equal(choose([markedWall, mob], {x: 0, y: 0}, 4, 0, true, true).id, 2);
+});
+test('Only walls leaves the original cursor aim, while unknown wall evidence stays unknown', () => {
+    assert.equal(choose([{...enemy(1, 0.1, 0), is_wall: true}], {x: 0, y: 0}, 4, 0, true, true), null);
+    const selected = choose([enemy(2, 1, 0)], {x: 0, y: 0}, 4, 0, false, true);
+    assert.equal(selected.id, 2);
+    assert.equal(selected.is_wall, null);
+});
 console.log(`${checks} AutoAim selection checks passed.`);

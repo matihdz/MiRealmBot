@@ -81,8 +81,8 @@ def portable_self_test() -> int:
         if client_ui.VERSION != VERSION or client_updates.VERSION != VERSION or update_core.VERSION != VERSION:
             raise RuntimeError("La interfaz y las actualizaciones tienen versiones distintas")
         default_aim = autoaim_settings.parse_autoaim()
-        if default_aim.enabled:
-            raise RuntimeError("AutoAim no debe activarse por defecto")
+        if default_aim.enabled or default_aim.prioritize_bosses or default_aim.ignore_walls:
+            raise RuntimeError("AutoAim y sus opciones no deben activarse por defecto")
         # Parse an empty supplied mapping; do not inspect the local registry.
         bindings = game_settings.parse_game_bindings({})
         report.update({
@@ -91,6 +91,8 @@ def portable_self_test() -> int:
             "update_version": update_core.VERSION,
             "new_modules_imported": ["autoaim_settings", "game_settings", "client_updates", "update_core"],
             "default_autoaim_enabled": default_aim.enabled,
+            "default_prioritize_bosses": default_aim.prioritize_bosses,
+            "default_ignore_walls": default_aim.ignore_walls,
             "game_preferences_accessed": False,
             "binding_parser_controls": sorted(bindings),
             "frida_version": frida.__version__,

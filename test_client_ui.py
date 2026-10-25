@@ -199,6 +199,8 @@ class ClientTests(unittest.TestCase):
 
     def test_autoaim_defaults_and_tab_drafts_are_independent_of_updates_and_replay(self):
         self.assertFalse(self.app.aim_enabled_var.get())
+        self.assertFalse(self.app.prioritize_bosses_var.get())
+        self.assertFalse(self.app.ignore_walls_var.get())
         self.assertEqual(self.app.extrapolation_var.get(), "302")
         self.assertEqual(self.app.aim_radius_var.get(), "4")
         self.assertEqual(self.settings_calls, 1)
@@ -240,7 +242,8 @@ class ClientTests(unittest.TestCase):
         self.app.save_parameters()
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["autoaim"], {"enabled": True, "mode": "close_to_mouse",
-            "activation": "autofire", "extrapolation": 12.5, "mouse_radius": 3.0})
+            "activation": "autofire", "extrapolation": 12.5, "mouse_radius": 3.0,
+            "prioritize_bosses": False, "ignore_walls": False})
         self.assertTrue(saved["detect_game_keys"])
         self.assertEqual(saved["extra_user_setting"], "preservar")
         self.assertEqual(self.calls, [])
@@ -250,17 +253,53 @@ class ClientTests(unittest.TestCase):
         self.bindings["nexus"] = GameBinding("nexus", "R", 114, "fixture")
         self.bindings["autofire"] = GameBinding("autofire", "I", 105, "fixture")
         self.app.aim_enabled_var.set(True)
+        self.app.prioritize_bosses_var.set(True)
+        self.app.ignore_walls_var.set(True)
         self.app.extrapolation_var.set("150")
         self.assertTrue(self.app.start_live())
         self.pump_until(lambda: len(self.calls) == 1)
         config, active = self.calls[0]
         self.assertEqual(config.nexus_key, "R")
         self.assertTrue(config.autoaim.enabled)
+        self.assertTrue(config.autoaim.prioritize_bosses)
+        self.assertTrue(config.autoaim.ignore_walls)
         self.assertEqual(config.autoaim.activation, "autofire")
         self.assertEqual(config.autoaim.extrapolation, 150)
         self.assertFalse(active)
         self.assertIn("Autofire: I", self.app.bindings_var.get())
         self.assertEqual(str(self.app.extrapolation_input.cget("state")), "disabled")
+        self.assertEqual(str(self.app.prioritize_bosses_check.cget("state")), "disabled")
+        self.assertEqual(str(self.app.ignore_walls_check.cget("state")), "disabled")
+
+    def test_target_filter_checkboxes_are_saved_restored_and_remain_independent(self):
+        self.select_aim()
+        self.assertEqual(str(self.app.prioritize_bosses_check.cget("state")), "normal")
+        self.assertEqual(str(self.app.ignore_walls_check.cget("state")), "normal")
+        self.app.prioritize_bosses_var.set(True)
+        self.app.ignore_walls_var.set(True)
+        self.app.save_parameters()
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertTrue(saved["autoaim"]["prioritize_bosses"])
+        self.assertTrue(saved["autoaim"]["ignore_walls"])
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        restored = App(window, config_path=self.config_path, recording_path=self.recording_path,
+                       settings_reader=lambda: self.bindings)
+        try:
+            self.assertTrue(restored.prioritize_bosses_var.get())
+            self.assertTrue(restored.ignore_walls_var.get())
+        finally:
+            restored.close()
+        for bosses, walls in ((False, True), (True, False), (False, False)):
+            with self.subTest(bosses=bosses, walls=walls):
+                self.app.prioritize_bosses_var.set(bosses)
+                self.app.ignore_walls_var.set(walls)
+                self.app.save_parameters()
+                saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+                self.assertIs(saved["autoaim"]["prioritize_bosses"], bosses)
+                self.assertIs(saved["autoaim"]["ignore_walls"], walls)
+                self.assertEqual(saved["autoaim"]["activation"], "autofire")
+        self.assertEqual(self.calls, [])
 
     def test_unknown_saved_key_waits_for_game_and_manual_mode_does_not_read(self):
         self.select_aim()
@@ -323,6 +362,14 @@ class ClientTests(unittest.TestCase):
             "enabled": True, "active": True, "autofire": True, "paused": True}})
         self.assertIn("Pausado", self.app.aim_status_var.get())
         self.assertIn("encendido", self.app.aim_status_var.get())
+
+    def test_boss_type_telemetry_preserves_unknown_and_unmarked_remains_an_enemy(self):
+        for is_boss, expected in ((True, "Boss"), (False, "Enemigo"), (None, "Tipo sin confirmar"),
+                                   (1, "Tipo sin confirmar")):
+            with self.subTest(is_boss=is_boss):
+                self.app._handle_runtime_record({"event": "telemetry", "autoaim": {
+                    "enabled": True, "active": False, "target_id": 45, "target_is_boss": is_boss}})
+                self.assertIn(expected, self.app.aim_status_var.get())
 
     def test_runtime_bindings_only_change_applied_key_when_fresh_and_detection_enabled(self):
         self.select_live()
