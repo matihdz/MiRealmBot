@@ -36,7 +36,7 @@ El modo disponible es **Close to Mouse**: selecciona el enemigo más cercano al 
 
 **Extrapolation** controla cuánto se adelanta la puntería según el movimiento del enemigo: 0 usa su posición actual y un valor mayor adelanta más. La unidad temporal de este coeficiente no está confirmada. Los cambios se aplican al volver a iniciar la sesión; **Guardar parámetros** los conserva para la próxima vez.
 
-El puente modifica el punto de puntería de la ruta de proyectiles investigada. No mueve el cursor ni enciende autofire ni dispara por sí mismo. La comprobación de AutoAim en combate está pendiente para este perfil.
+El puente modifica el punto de puntería de la ruta de proyectiles investigada. No mueve el cursor ni enciende autofire ni dispara por sí mismo. La prueba activa del perfil actual registró selección de enemigos y ajustes de puntería; el usuario confirmó que apunta correctamente. La precisión y la compatibilidad con otro equipo siguen pendientes de medición.
 
 ## Actualizar desde el programa
 
