@@ -1,107 +1,32 @@
-MiRealmBot 0.4.4 - Inicio rápido
+MiRealmBot - Inicio rápido
 
-1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
-2. Abre MiRealmBot.exe en la carpeta extraída.
+1. Descarga MiRealmBot-Windows-x64.zip y extrae toda la carpeta.
+2. Abre MiRealmBot.exe. Conserva _internal junto al ejecutable.
 3. Abre RotMG Exalt con el launcher oficial y deja el personaje en Nexus.
-4. En AutoNexus marca "Activar AutoNexus" si quieres usarlo y ajusta
-   porcentaje y predicción. El paquete comienza en 90 %.
-5. Deja marcada "Leer teclas del juego" para detectar la tecla Nexus.
-   Se confirma dentro del juego al iniciar la sesión. Si no se reconoce,
-   detén la sesión, desmarca esa opción y elige la MISMA tecla manualmente.
-   CTRL = Control izquierdo.
-6. Configura AutoAim o Debuffs si quieres usarlos. Los cambios válidos
-   se guardan automáticamente y se aplican con el bot funcionando.
-7. En "Juego en vivo", pulsa "Iniciar bot" para activar los módulos.
-8. Vuelve al juego y mantenlo en primer plano.
+4. Configura los módulos que quieras usar en AutoNexus, AutoAim y Debuffs.
+5. En Juego en vivo, pulsa Iniciar bot y vuelve al juego.
 
-LAS PESTAÑAS
-- Juego en vivo: iniciar/detener y estado del bot.
-- AutoNexus: activación, porcentaje, predicción y tecla Nexus.
-- AutoAim: sus opciones de apuntado y tecla de autofire detectada.
-- Debuffs: protección frente a efectos de estado, con opciones por efecto.
-- Actualizaciones: buscar, descargar e instalar versiones nuevas.
-- Los cambios se guardan solos tras una pausa breve al editar. El estado
-  muestra cuándo se guardaron y cuándo el motor los aplicó.
-- Un número incompleto o inválido conserva la última configuración válida.
-- Cambiar ajustes no inicia una sesión que estaba detenida.
-- Se retiraron la reproducción de registros y la barra lateral.
-- Cada módulo se activa por separado. Para usar sólo AutoAim, desmarca
-  "Activar AutoNexus". Si todos están apagados no se puede iniciar el bot.
+Los módulos se activan por separado. Los ajustes válidos se guardan solos
+y se aplican durante la sesión. Abrir el programa deja el bot detenido.
 
-AUTOAIM OPCIONAL
-- Marca "Activar AutoAim"; se guarda y aplica automáticamente.
-- Close to Mouse elige un enemigo cercano al cursor.
-- Para empezar, deja Extrapolation en 302 y Radio junto al cursor en 4.
-- Priorizar bosses: prefiere al boss marcado por el juego dentro del radio.
-  Entre varios bosses elige el más cercano; sin boss, selección normal.
-- Ignorar murallas: excluye las murallas como objetivos del AutoAim.
-- Ambos filtros son independientes y empiezan desmarcados.
-- Pulsa "Iniciar bot" en Juego en vivo. Vuelve al juego,
-  enciende autofire con tu tecla configurada y acerca el cursor al objetivo.
-- No necesitas mantener otra tecla pulsada. Actúa con autofire encendido
-  y el juego sin pausa. No mueve el cursor ni inicia ataques por sí mismo.
-- Extrapolation 0 usa la posición actual; valores mayores adelantan más.
+AUTOAIM
+Enciende el autofire del juego con tu tecla configurada. Close to Mouse
+elige un enemigo cercano al cursor; Extrapolation ajusta el adelanto.
 
 DEBUFFS
-- Marca "Activar módulo Debuffs" y "Confuse" para proteger los controles del jugador local y registrar el efecto.
-- "Registro de Confuse", en Juego en vivo, muestra detecciones, último
-  intervalo y contadores de movimiento. Detectar el efecto no demuestra un
-  bloqueo: comprueba cómo te mueves mientras tengas Confuse y el juego al frente.
-- "Blind" es independiente y empieza
-  desmarcado. Evita el oscurecimiento en la ruta visual verificada y añade
-  "Registro de Blind" a Juego en vivo. El icono puede seguir presente.
-- "Silenced" empieza desmarcado.
-  Omite el filtro local investigado de Silenced. Mantiene el coste de maná,
-  el enfriamiento y los demás filtros. Una prueba manual de 0.4.4 tuvo un
-  resultado exitoso confirmado por el usuario. Sigue siendo experimental;
-  comprueba el efecto práctico de tu habilidad. El icono puede seguir presente.
-- "Registro de Silenced" muestra el estado y consultas/omisiones locales.
-  Las omisiones no cuentan habilidades usadas o aceptadas. Comprueba su efecto
-  práctico al recibir Silenced; no basta con ver una animación o gasto de MP.
-- La protección Quiet aún no está disponible: no se verificó una forma de
-  evitar sus efectos sobre maná y habilidades. No recupera MP ni lo bloquea.
-- La casilla "Quiet"
-  recoge el efecto y el maná mientras juegas. Marca también "Activar módulo
-  Debuffs" y revisa "Registro de Quiet" en Juego en vivo.
-- Puede usarse solo o junto con otros módulos. El historial conserva el
-  último intervalo observado dentro de los logs recientes limitados del bot.
-- AntiConfuse y AntiBlind tienen análisis estático, pruebas simuladas
-  y pruebas satisfactorias informadas por el usuario en su instalación.
-
-CONFIGURACIÓN
-- El archivo es mirealmbot.json. El primer inicio copia los ajustes antiguos
-  de autonexus.json si aún no existe el nuevo, preservando original y copia.
-- mirealmbot.json.bak conserva una configuración anterior sin acumular
-  un archivo por cada cambio.
-- Apagar todos los módulos detiene el bot. Para volver a usarlo activa
-  alguno y pulsa "Iniciar bot".
-
-REGISTROS RECIENTES
-- Los logs del bot se reutilizan: tres archivos de hasta 1 MiB cada uno,
-  máximo 3 MiB de historial activo en analysis. Se borra lo más antiguo.
-- Al iniciar una sesión se retiran los logs del formato anterior del bot.
-  Los archivos ocupados se conservan hasta poder limpiarlos.
-- Otros análisis y los respaldos de versiones quedan fuera de esta cuota.
-- Si falla la escritura del registro se avisa y el bot sigue funcionando.
+Confuse protege los controles y Blind evita el oscurecimiento.
+Silenced es experimental y conserva el coste de maná y el enfriamiento.
+Quiet sólo registra el efecto y el maná; no ofrece protección.
 
 ACTUALIZAR
-- Abre Actualizaciones y pulsa "Buscar actualizaciones".
-- Si hay una versión nueva, pulsa "Descargar actualización".
-- Detén la sesión, espera su limpieza y pulsa "Instalar y reiniciar".
-- Conserva tus parámetros y deja la carpeta anterior como respaldo.
-  Los respaldos pueden conservar registros antiguos.
-- Si usas 0.1.0, descarga y extrae la versión actual manualmente una vez.
+En Actualizaciones, busca y descarga la nueva versión. Detén el bot,
+espera su cierre y pulsa Instalar y reiniciar. Conserva tu configuración.
 
-PARA TENER EN CUENTA
-- Abrir el programa deja la sesión detenida. "Iniciar bot" siempre inicia
-  una sesión activa; ya no hay selector de modo.
-- Conserva _internal junto al ejecutable. No necesitas instalar Python,
-  Frida, Ghidra ni REA.
-- Windows de 64 bits e instalación del launcher oficial.
-- Si el perfil no coincide tras una actualización del juego, necesitas
-  una versión compatible de MiRealmBot.
-- La predicción cubre la ruta investigada de proyectiles; no todo el daño
-  del juego. Enviar la tecla no garantiza supervivencia.
+REQUISITOS
+Windows de 64 bits, launcher oficial y una versión compatible del juego.
+Mantén el juego en primer plano. No necesitas instalar Python.
+La predicción de AutoNexus contempla proyectiles, no todo el daño.
 
 Guía completa: docs/USO.md
-Última versión: https://github.com/matihdz/MiRealmBot/releases/latest
+Descargas: https://github.com/matihdz/MiRealmBot/releases/latest
+Soporte: https://github.com/matihdz/MiRealmBot/issues
