@@ -164,6 +164,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.configure_options = []
         self.configure_result = {"configured": True}
         self.configure_error = None
+        self.stop_receipt = None
         self.poll_count = 0
         self.on_poll = None
         self.on_record = None
@@ -221,6 +222,7 @@ class WorkerLifecycleTests(unittest.TestCase):
                 owner.calls.append("agent.stop")
                 if owner.fail_cleanup:
                     raise RuntimeError("stop failed")
+                return owner.stop_receipt
 
             def unload(self):
                 owner.calls.append("script.unload")
@@ -341,6 +343,225 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertNotIn("session.attach", self.calls)
         error = next(event for event in self.updates if event["event"] == "error")
         self.assertIn("Activa al menos un módulo", error["error"])
+
+    def test_quiet_recording_alone_runs_without_input_or_confuse_protection(self):
+        config = config_from_mapping({"autonexus_enabled": False,
+                                      "debuffs": {"enabled": True, "confuse": False, "record_quiet": True}})
+        self.nexus_binding = None
+        self.assertEqual(self.run_worker(active=True, config=config), 0)
+        self.assertIn("agent.poll", self.calls)
+        self.assertNotIn("actuator.create", self.calls)
+        self.assertNotIn("key.request", self.calls)
+        self.assertIs(self.agent_options["debuffs"]["record_quiet"], True)
+        self.assertIs(self.agent_options["debuffs"]["active"], False)
+        telemetry = next(event for event in self.updates if event["event"] == "telemetry")
+        self.assertEqual(telemetry["nexus_binding_status"], "disabled")
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+
+    def test_blind_protection_alone_runs_without_aim_nexus_or_confuse(self):
+        config = config_from_mapping({"autonexus_enabled": False,
+                                      "debuffs": {"enabled": True, "confuse": False, "blind": True}})
+        self.nexus_binding = None
+        self.assertEqual(self.run_worker(active=True, config=config), 0)
+        self.assertIn("agent.poll", self.calls)
+        self.assertNotIn("actuator.create", self.calls)
+        self.assertNotIn("key.request", self.calls)
+        self.assertIs(self.agent_options["debuffs"]["blind"], True)
+        self.assertIs(self.agent_options["debuffs"]["confuse"], False)
+        self.assertIs(self.agent_options["debuffs"]["active"], True)
+        self.assertIs(self.agent_options["autoaim"]["active"], False)
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+
+    def test_silenced_experiment_alone_runs_without_other_modules_or_nexus_input(self):
+        config = config_from_mapping({"autonexus_enabled": False,
+                                      "debuffs": {"enabled": True, "confuse": False, "silenced": True}})
+        self.nexus_binding = None
+        self.assertEqual(self.run_worker(active=True, config=config), 0)
+        self.assertIn("agent.poll", self.calls)
+        self.assertNotIn("actuator.create", self.calls)
+        self.assertNotIn("key.request", self.calls)
+        self.assertIs(self.agent_options["debuffs"]["silenced"], True)
+        self.assertIs(self.agent_options["debuffs"]["confuse"], False)
+        self.assertIs(self.agent_options["debuffs"]["blind"], False)
+        self.assertIs(self.agent_options["debuffs"]["active"], True)
+        self.assertIs(self.agent_options["autoaim"]["active"], False)
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+
+    def test_live_quiet_recording_keeps_session_when_other_modules_are_disabled(self):
+        control = RuntimeControl()
+        initial = config_from_mapping({"threshold": 0.1})
+        recorded = config_from_mapping({"autonexus_enabled": False, "threshold": 0.1,
+                                         "debuffs": {"enabled": True, "confuse": False, "record_quiet": True}})
+        self.stop_after_telemetry = False
+
+        def poll(payload):
+            if self.poll_count == 1:
+                control.request(recorded)
+            elif self.poll_count == 2:
+                payload["player_hp"] = 1
+            else:
+                self.stop.set()
+
+        self.on_poll = poll
+        self.assertEqual(self.run_worker(active=True, config=initial, control=control), 0)
+        self.assertEqual(self.calls.count("session.attach"), 1)
+        self.assertEqual(self.calls.count("agent.start"), 1)
+        self.assertEqual(len(self.configure_options), 1)
+        self.assertIs(self.configure_options[0]["debuffs"]["record_quiet"], True)
+        self.assertIs(self.configure_options[0]["debuffs"]["active"], False)
+        self.assertNotIn("key.request", self.calls)
+        self.assertFalse(any(event.get("reason") == "no_enabled_modules" for event in self.updates))
+
+    def test_debuff_episode_events_preserve_snapshots_and_independent_changed_revisions(self):
+        self.stop_after_telemetry = False
+        observations = []
+        confuse_observations = []
+        blind_observations = []
+        silenced_observations = []
+
+        def poll(payload):
+            if self.poll_count == 6:
+                self.stop.set()
+                return
+            revision = (0, 0, 1, 1, 2)[self.poll_count - 1]
+            observation = {"revision": revision, "enabled": True, "available": False,
+                           "fresh": False, "current": None, "age_ms": None,
+                           "detections": 1 if revision else 0, "error": "Lectura de maná pendiente",
+                           "last_episode": None if revision == 0 else {
+                               "state": "active" if revision == 1 else "interrupted",
+                               "end_reason": None if revision == 1 else "map_changed",
+                               "before": {"mp": 305, "mp_sync": 305}, "first": {"mp": 0},
+                               "latest": {"mp": 0}, "after": None}}
+            observations.append(observation)
+            confuse_revision = (0, 1, 1, 2, 2)[self.poll_count - 1]
+            confuse = {"revision": confuse_revision, "enabled": True, "available": True,
+                       "fresh": True, "age_ms": 0, "detections": min(confuse_revision, 1),
+                       "current": {"confuse": confuse_revision == 1, "condition_word0": 1024,
+                                   "movement_checks": self.poll_count, "movement_detections": 0, "movement_blocks": 0},
+                       "last_episode": None if confuse_revision == 0 else {
+                           "state": "active" if confuse_revision == 1 else "ended"}}
+            confuse_observations.append(confuse)
+            blind_revision = (0, 0, 0, 1, 2)[self.poll_count - 1]
+            blind = {"revision": blind_revision, "enabled": True, "available": True,
+                     "fresh": True, "age_ms": 0, "detections": min(blind_revision, 1),
+                     "current": {"blind": blind_revision == 1, "visual_checks": self.poll_count,
+                                 "visual_detections": 0, "visual_blocks": 0},
+                     "last_episode": None if blind_revision == 0 else {
+                         "state": "active" if blind_revision == 1 else "interrupted"}}
+            blind_observations.append(blind)
+            silenced_revision = (0, 1, 1, 1, 2)[self.poll_count - 1]
+            silenced = {"revision": silenced_revision, "enabled": True, "available": True,
+                        "fresh": True, "age_ms": 0, "detections": min(silenced_revision, 1),
+                        "current": {"silenced": silenced_revision == 1, "condition_word1": 65536,
+                                    "ability_gate_checks": self.poll_count,
+                                    "ability_gate_detections": 0, "ability_gate_bypasses": 0},
+                        "last_episode": None if silenced_revision == 0 else {
+                            "state": "active" if silenced_revision == 1 else "ended"}}
+            silenced_observations.append(silenced)
+            payload["debuffs"] = {"quiet_observation": observation, "confuse_observation": confuse,
+                                  "blind_observation": blind, "silenced_observation": silenced}
+            if self.poll_count >= 3:
+                payload["player_hp"] = 1
+
+        self.on_poll = poll
+        config = config_from_mapping({"threshold": 0.1, "debuffs": {"enabled": True, "record_quiet": True}})
+        self.assertEqual(self.run_worker(active=True, config=config), 0)
+        events = [event for event in self.updates if event["event"] == "quiet_observation"]
+        self.assertEqual([event["quiet_observation"]["revision"] for event in events], [0, 1, 2])
+        for event, original in zip(events, (observations[0], observations[2], observations[4])):
+            self.assertIs(event["quiet_observation"], original)
+        # Diagnostic errors are data; low health can still request AutoNexus.
+        self.assertEqual(self.calls.count("key.request"), 1)
+        self.assertFalse(any(event["event"] in ("error", "config_error") for event in self.updates))
+        logged = [json.loads(line) for line in (self.root / "analysis" / "mirealmbot-session.jsonl").read_text(
+            encoding="utf-8").splitlines()]
+        self.assertEqual([event["quiet_observation"] for event in logged if event["event"] == "quiet_observation"],
+                         [observations[0], observations[2], observations[4]])
+        events = [event for event in self.updates if event["event"] == "confuse_observation"]
+        self.assertEqual([event["confuse_observation"]["revision"] for event in events], [0, 1, 2])
+        for event, original in zip(events, (confuse_observations[0], confuse_observations[1], confuse_observations[3])):
+            self.assertIs(event["confuse_observation"], original)
+        self.assertEqual([event["confuse_observation"] for event in logged if event["event"] == "confuse_observation"],
+                         [confuse_observations[0], confuse_observations[1], confuse_observations[3]])
+        events = [event for event in self.updates if event["event"] == "blind_observation"]
+        self.assertEqual([event["blind_observation"]["revision"] for event in events], [0, 1, 2])
+        for event, original in zip(events, (blind_observations[0], blind_observations[3], blind_observations[4])):
+            self.assertIs(event["blind_observation"], original)
+        self.assertEqual([event["blind_observation"] for event in logged if event["event"] == "blind_observation"],
+                         [blind_observations[0], blind_observations[3], blind_observations[4]])
+        events = [event for event in self.updates if event["event"] == "silenced_observation"]
+        self.assertEqual([event["silenced_observation"]["revision"] for event in events], [0, 1, 2])
+        for event, original in zip(events, (silenced_observations[0], silenced_observations[1], silenced_observations[4])):
+            self.assertIs(event["silenced_observation"], original)
+        self.assertEqual([event["silenced_observation"] for event in logged if event["event"] == "silenced_observation"],
+                         [silenced_observations[0], silenced_observations[1], silenced_observations[4]])
+
+    def test_stopped_receipt_retains_actual_interrupted_episode_before_unload(self):
+        active = {"revision": 1, "enabled": True, "fresh": True, "detections": 1,
+                  "current": {"quiet": True, "mp": 0}, "last_episode": {
+                      "id": 1, "state": "active", "end_reason": None,
+                      "before": {"mp": 305}, "first": {"mp": 0}, "latest": {"mp": 0}, "after": None}}
+        final = dict(active, revision=2, fresh=False, current=None, last_episode=dict(
+            active["last_episode"], state="interrupted", end_reason="stopped"))
+        confuse_sample = {"confuse": True, "movement_checks": 12, "movement_detections": 0, "movement_blocks": 0}
+        confuse_active = dict(active, current=confuse_sample, last_episode={
+            "id": 1, "state": "active", "end_reason": None, "before": None,
+            "first": confuse_sample, "latest": confuse_sample, "after": None})
+        confuse_final = dict(confuse_active, revision=2, fresh=False, current=None,
+                             last_episode=dict(confuse_active["last_episode"], state="interrupted", end_reason="stopped"))
+        blind_sample = {"blind": True, "visual_checks": 3, "visual_detections": 1, "visual_blocks": 0}
+        blind_active = dict(active, current=blind_sample, last_episode={
+            "id": 1, "state": "active", "end_reason": None, "before": None,
+            "first": blind_sample, "latest": blind_sample, "after": None})
+        blind_final = dict(blind_active, revision=2, fresh=False, current=None,
+                           last_episode=dict(blind_active["last_episode"], state="interrupted", end_reason="stopped"))
+        silenced_sample = {"silenced": True, "condition_word1": 65536, "ability_gate_checks": 5,
+                           "ability_gate_detections": 2, "ability_gate_bypasses": 0}
+        silenced_active = dict(active, current=silenced_sample, last_episode={
+            "id": 1, "state": "active", "end_reason": None, "before": None,
+            "first": silenced_sample, "latest": silenced_sample, "after": None})
+        silenced_final = dict(silenced_active, revision=2, fresh=False, current=None,
+                              last_episode=dict(silenced_active["last_episode"], state="interrupted", end_reason="stopped"))
+        self.stop_receipt = {"stopped": True, "hooks_detached": 1,
+                             "debuffs": {"quiet_observation": final, "confuse_observation": confuse_final,
+                                          "blind_observation": blind_final, "silenced_observation": silenced_final}}
+        self.on_poll = lambda payload: payload.update(debuffs={
+            "quiet_observation": active, "confuse_observation": confuse_active,
+            "blind_observation": blind_active, "silenced_observation": silenced_active})
+
+        def recorded(event):
+            if event["event"] == "quiet_observation" and event["quiet_observation"]["revision"] == 2:
+                self.calls.append("quiet.final.recorded")
+
+        self.on_record = recorded
+        config = config_from_mapping({"debuffs": {"enabled": True, "record_quiet": True}})
+        self.assertEqual(self.run_worker(config=config), 0)
+        self.assertEqual(self.calls.count("agent.stop"), 1)
+        self.assertLess(self.calls.index("agent.stop"), self.calls.index("quiet.final.recorded"))
+        self.assertLess(self.calls.index("quiet.final.recorded"), self.calls.index("script.unload"))
+        logged = [json.loads(line) for line in (self.root / "analysis" / "mirealmbot-session.jsonl").read_text(
+            encoding="utf-8").splitlines()]
+        episodes = [event["quiet_observation"] for event in logged if event["event"] == "quiet_observation"]
+        self.assertEqual(episodes, [active, final])
+        self.assertEqual(episodes[-1]["last_episode"]["state"], "interrupted")
+        self.assertIsNone(episodes[-1]["last_episode"]["after"])
+        confuse_episodes = [event["confuse_observation"] for event in logged if event["event"] == "confuse_observation"]
+        self.assertEqual(confuse_episodes, [confuse_active, confuse_final])
+        blind_episodes = [event["blind_observation"] for event in logged if event["event"] == "blind_observation"]
+        self.assertEqual(blind_episodes, [blind_active, blind_final])
+        silenced_episodes = [event["silenced_observation"] for event in logged if event["event"] == "silenced_observation"]
+        self.assertEqual(silenced_episodes, [silenced_active, silenced_final])
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+
+    def test_final_diagnostic_failure_warns_without_marking_cleanup_incomplete(self):
+        self.stop_receipt = {"stopped": True, "hooks_detached": 1, "debuffs": None,
+                             "diagnostics_error": "snapshot pending " * 100}
+        self.assertEqual(self.run_worker(), 0)
+        warning = next(event for event in self.updates if event["event"] == "diagnostic_warning")
+        self.assertEqual(warning["module"], "Debuffs")
+        self.assertLessEqual(len(warning["error"]), 240)
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+        self.assertEqual(self.calls[-4:], ["agent.stop", "script.unload", "session.detach", "identity.close"])
 
     def test_initial_configuration_is_acknowledged_before_running(self):
         self.assertEqual(self.run_worker(), 0)

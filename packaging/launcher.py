@@ -127,10 +127,28 @@ def portable_self_test() -> int:
                             and "guardar" in str(widget.cget("text")).casefold()]
             if save_buttons:
                 raise RuntimeError("La interfaz no debe mostrar botones Guardar; los cambios se guardan automáticamente")
-            quiet_disabled = app.quiet_check.instate(("disabled",))
-            quiet_value = bool(app.draft.quiet.get())
-            if not quiet_disabled or quiet_value:
-                raise RuntimeError("Quiet debe permanecer desactivado y su control deshabilitado")
+            quiet_recording_enabled = not app.quiet_check.instate(("disabled",))
+            quiet_recording_value = bool(app.draft.record_quiet.get())
+            quiet_control_text = str(app.quiet_check.cget("text"))
+            if (quiet_control_text != "Quiet" or not quiet_recording_enabled
+                    or quiet_recording_value != config.debuffs.record_quiet
+                    or app.draft.validate().debuffs.quiet
+                    or debuffs_settings.QUIET_SUPPORTED):
+                raise RuntimeError("La casilla Quiet debe controlar sólo el registro de pruebas")
+            protection_ui_report = {}
+            for effect, expected_text in (
+                    ("confuse", "Confuse"),
+                    ("blind", "Blind"),
+                    ("silenced", "Silenced")):
+                control = getattr(app, effect + "_check")
+                control_text = str(control.cget("text"))
+                recording_row = effect in app.live_vars
+                if (control_text != expected_text
+                        or bool(getattr(app.draft, effect).get()) != getattr(config.debuffs, effect)
+                        or control.instate(("disabled",)) or not recording_row):
+                    raise RuntimeError(effect + " debe ofrecer su control y registro independientes")
+                protection_ui_report["ui_" + effect + "_control_text"] = control_text
+                protection_ui_report["ui_" + effect + "_recording_row_present"] = recording_row
             if root.state() != "withdrawn":
                 raise RuntimeError("La comprobación de interfaz debe permanecer oculta")
             if runtime_called or app.runtime_thread is not None or app.updates_panel.busy:
@@ -148,7 +166,9 @@ def portable_self_test() -> int:
         default_config = config_from_mapping({})
         if default_aim.enabled or default_aim.prioritize_bosses or default_aim.ignore_walls:
             raise RuntimeError("AutoAim y sus opciones no deben activarse por defecto")
-        if not default_config.autonexus_enabled or default_debuffs.enabled or default_debuffs.quiet:
+        if (not default_config.autonexus_enabled or default_debuffs.enabled
+                or default_debuffs.blind or default_debuffs.silenced
+                or default_debuffs.quiet or default_debuffs.record_quiet):
             raise RuntimeError("Los módulos no tienen los valores predeterminados esperados")
         report.update({
             "ok": True,
@@ -163,8 +183,11 @@ def portable_self_test() -> int:
             "ui_start_button_count": len(start_buttons),
             "ui_mode_selector_present": mode_selector,
             "ui_save_button_count": len(save_buttons),
-            "ui_quiet_disabled": quiet_disabled,
-            "ui_quiet_value": quiet_value,
+            "ui_quiet_control_text": quiet_control_text,
+            "ui_quiet_recording_control_enabled": quiet_recording_enabled,
+            "ui_quiet_recording_selected": quiet_recording_value,
+            "quiet_protection_supported": debuffs_settings.QUIET_SUPPORTED,
+            **protection_ui_report,
             "configuration_unchanged_on_ui_open_close": True,
             "runtime_runner_invoked": runtime_called,
             "ui_configuration_validated": True,

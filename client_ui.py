@@ -18,7 +18,7 @@ from app_paths import ensure_default_config
 from app_version import VERSION
 from autonexus_core import AutoNexus
 from client_updates import UpdatePanel
-from debuffs_settings import DebuffSettings, QUIET_SUPPORTED, QUIET_UNSUPPORTED_REASON
+from debuffs_settings import DEBUFF_OBSERVATIONS, DebuffSettings, QUIET_SUPPORTED, QUIET_UNSUPPORTED_REASON
 from game_settings import read_game_bindings, unity_key_name
 from bot_runtime import config_from_mapping, load_config, run_runtime, save_config
 from runtime_control import RuntimeControl
@@ -43,6 +43,15 @@ REASONS = {
     "autonexus is disabled": "AutoNexus desactivado", "AutoNexus is disabled": "AutoNexus desactivado",
     "a player gate blocks AutoNexus": "Un estado del jugador bloquea la salida",
 }
+OBSERVATION_COUNTERS = {
+    "Confuse": ("movimiento", (("comprobaciones", "movement_checks"),
+                               ("detecciones", "movement_detections"), ("bloqueos", "movement_blocks"))),
+    "Blind": ("visión", (("comprobaciones", "visual_checks"),
+                         ("detecciones", "visual_detections"), ("bloqueos", "visual_blocks"))),
+    "Silenced": ("filtro local de habilidad", (("consultas", "ability_gate_checks"),
+                                               ("detecciones", "ability_gate_detections"),
+                                               ("omisiones", "ability_gate_bypasses"))),
+}
 
 
 def display_text(value, limit=600):
@@ -56,6 +65,56 @@ def short_reason(value):
 
 def number(value):
     return "—" if value is None else str(value)
+
+
+def debuff_observation_text(observation, module):
+    """Present the Debuffs owner's facts, keeping old samples explicitly historical."""
+    suffix = (" · no protege contra Quiet" if module == "Quiet" else
+              " · experimental; aceptación del juego pendiente" if module == "Silenced" else " · registro de pruebas")
+    if not isinstance(observation, dict):
+        return "Esperando datos del registro" + suffix
+    if observation.get("enabled") is False:
+        return "Registro desactivado" + suffix
+    current = observation.get("current")
+    fresh = observation.get("fresh") is True and isinstance(current, dict)
+    if observation.get("available") is False:
+        text = "Registro no disponible"
+    elif fresh:
+        present = current.get(module.lower())
+        text = module + " detectado" if present is True else "Esperando " + module if present is False else module + " sin confirmar"
+    else:
+        text = "Esperando datos recientes"
+        if observation.get("fresh") is False:
+            text += " · lectura desactualizada"
+    detections = observation.get("detections")
+    if isinstance(detections, int) and not isinstance(detections, bool) and detections >= 0:
+        text += (" · intervalos detectados " if module in OBSERVATION_COUNTERS else " · episodios ") + str(detections)
+    sample = current if fresh else None
+    episode = observation.get("last_episode")
+    if isinstance(episode, dict):
+        state = {"active": "en curso", "ended": "terminado", "interrupted": "interrumpido"}.get(episode.get("state"))
+        if state:
+            text += " · último episodio " + state
+        if not fresh and isinstance(episode.get("latest"), dict):
+            sample = episode["latest"]
+            text += " · última lectura del episodio (histórica)"
+        if episode.get("end_reason"):
+            text += " · " + display_text(episode["end_reason"], 100)
+    if isinstance(sample, dict) and module == "Quiet":
+        def observed_number(value):
+            return number(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else "—"
+        text += " · MP " + observed_number(sample.get("mp"))
+        text += " · MP de respaldo " + observed_number(sample.get("mp_sync"))
+        override = sample.get("mp_override")
+        text += " · override MP " + ("sí" if override is True else "no" if override is False else "sin confirmar")
+    elif isinstance(sample, dict) and module in OBSERVATION_COUNTERS:
+        scope, counters = OBSERVATION_COUNTERS[module]
+        text += " · " + scope + ": "
+        text += " · ".join(label + " " + (str(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else "—")
+                            for label, value in ((label, sample.get(field)) for label, field in counters))
+    if observation.get("error"):
+        text += " · " + display_text(observation["error"], 180)
+    return display_text(text + suffix)
 
 
 class ConfigDraft:
@@ -76,18 +135,23 @@ class ConfigDraft:
         self.ignore_walls = tk.BooleanVar(master, config.autoaim.ignore_walls)
         self.debuffs_enabled = tk.BooleanVar(master, config.debuffs.enabled)
         self.confuse = tk.BooleanVar(master, config.debuffs.confuse)
-        self.quiet = tk.BooleanVar(master, config.debuffs.quiet)
+        self.blind = tk.BooleanVar(master, config.debuffs.blind)
+        self.silenced = tk.BooleanVar(master, config.debuffs.silenced)
+        self.record_quiet = tk.BooleanVar(master, config.debuffs.record_quiet)
 
     @property
     def variables(self):
         return (self.nexus_enabled, self.threshold, self.prediction_enabled, self.nexus_key, self.detect_game_keys,
                 self.aim_enabled, self.extrapolation, self.mouse_radius, self.prioritize_bosses, self.ignore_walls,
-                self.debuffs_enabled, self.confuse, self.quiet)
+                self.debuffs_enabled, self.confuse, self.blind, self.silenced, self.record_quiet)
 
     def any_module_enabled(self):
         protections = DebuffSettings(enabled=self.debuffs_enabled.get(),
-                                     confuse=self.confuse.get(), quiet=self.quiet.get())
-        return self.nexus_enabled.get() or self.aim_enabled.get() or protections.has_protection
+                                     confuse=self.confuse.get(),
+                                     blind=self.blind.get(),
+                                     silenced=self.silenced.get(),
+                                     record_quiet=self.record_quiet.get())
+        return self.nexus_enabled.get() or self.aim_enabled.get() or protections.has_work
 
     @staticmethod
     def _number(variable, label):
@@ -110,7 +174,9 @@ class ConfigDraft:
                 "extrapolation": self._number(self.extrapolation, "Extrapolation"),
                 "mouse_radius": self._number(self.mouse_radius, "Radio junto al cursor"),
                 "prioritize_bosses": self.prioritize_bosses.get(), "ignore_walls": self.ignore_walls.get()},
-            debuffs={"enabled": self.debuffs_enabled.get(), "confuse": self.confuse.get(), "quiet": self.quiet.get()}))
+            debuffs={"enabled": self.debuffs_enabled.get(), "confuse": self.confuse.get(),
+                     "blind": self.blind.get(), "silenced": self.silenced.get(),
+                     "quiet": False, "record_quiet": self.record_quiet.get()}))
 
 
 class RuntimeInbox:
@@ -131,6 +197,14 @@ class RuntimeInbox:
             with self.lock:
                 if kind == "telemetry":
                     self.latest = record
+                if kind in DEBUFF_OBSERVATIONS:
+                    # Diagnostics must never wait for Tk or delay protection.
+                    # Complete episodes remain in the existing bounded JSONL.
+                    module = DEBUFF_OBSERVATIONS[kind]
+                    self.notes.append("Registro de " + module + ": " + debuff_observation_text(record.get(kind), module))
+                if kind == "diagnostic_warning":
+                    self.notes.append("Aviso del registro de " + display_text(record.get("module") or "diagnóstico", 40)
+                                      + ": " + display_text(record.get("error") or "No se conservó el diagnóstico final", 240))
                 if kind == "prediction_transport":
                     for event in record.get("events", []):
                         if event.get("kind") == "damage":
@@ -201,7 +275,7 @@ class App:
 
     def _style(self):
         self.root.title(f"MiRealmBot {VERSION}")
-        self.root.geometry("1100x850")
+        self.root.geometry("1100x1050")
         self.root.minsize(940, 740)
         self.root.configure(bg=BG)
         self.root.option_add("*Font", "{Segoe UI} 10")
@@ -302,6 +376,8 @@ class App:
         for row, (key, label, initial) in enumerate((
             ("map", "Mapa", "—"), ("decision", "AutoNexus", "Sin sesión"), ("autoaim", "AutoAim", "Sin sesión"),
             ("debuffs", "Debuffs", "Sin sesión"),
+            *((module.lower(), "Registro de " + module, "Sin sesión" + (" · no protege contra Quiet" if module == "Quiet" else ""))
+              for module in DEBUFF_OBSERVATIONS.values()),
             ("focus", "Ventana del juego", "Sin comprobar"), ("delivery", "Última salida", "Ninguna"),
             ("applied", "Configuración aplicada", "Todavía no se ha iniciado una sesión"),
             ("log", "Registro", "—"), ("logging", "Estado del registro", "Registro reciente: máx. 3 MiB"),
@@ -398,23 +474,37 @@ class App:
         p = self.debuffs_tab
         p.columnconfigure(0, weight=1)
         self._label(p, "Debuffs", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w")
-        self._label(p, "Configuración de Confuse y Quiet. Revisa su estado en Juego en vivo después de iniciar.",
+        self._label(p, "Configuración de Confuse, Blind, Silenced y Quiet. Revisa su estado en Juego en vivo después de iniciar.",
                     style="Muted.TLabel", wraplength=900).grid(row=1, column=0, sticky="w", pady=(5, 16))
         settings = ttk.Frame(p, style="Panel.TFrame", padding=20)
         settings.grid(row=2, column=0, sticky="ew")
         self.debuffs_enabled_check = ttk.Checkbutton(settings, text="Activar módulo Debuffs", variable=self.draft.debuffs_enabled)
         self.debuffs_enabled_check.grid(row=0, column=0, sticky="w", pady=(0, 12))
         self.confuse_check = ttk.Checkbutton(settings, text="Confuse", variable=self.draft.confuse)
-        self.quiet_check = ttk.Checkbutton(settings, text="Quiet", variable=self.draft.quiet)
+        self.blind_check = ttk.Checkbutton(settings, text="Blind", variable=self.draft.blind)
+        self.silenced_check = ttk.Checkbutton(settings, text="Silenced", variable=self.draft.silenced)
+        self.quiet_check = ttk.Checkbutton(settings, text="Quiet",
+                                          variable=self.draft.record_quiet)
         self.confuse_check.grid(row=1, column=0, sticky="w")
-        self.quiet_check.grid(row=2, column=0, sticky="w")
+        self.blind_check.grid(row=2, column=0, sticky="w")
+        self.silenced_check.grid(row=3, column=0, sticky="w")
+        self.quiet_check.grid(row=4, column=0, sticky="w")
+        self._label(settings, "Registra Quiet y el maná durante la sesión para comprobar su comportamiento. "
+                    "No bloquea Quiet ni protege el maná o las habilidades. Revisa el registro en Juego en vivo.",
+                    style="PanelMuted.TLabel", wraplength=900).grid(row=9, column=0, sticky="w", pady=(12, 0))
         self._label(settings, "AntiConfuse mantiene los controles de movimiento habituales del personaje local. "
-                    "La integración se ha comprobado por análisis estático; falta una prueba en juego.",
-                    style="PanelMuted.TLabel", wraplength=900).grid(row=3, column=0, sticky="w", pady=(12, 0))
+                    "Registra el efecto y las comprobaciones y bloqueos de movimiento.",
+                    style="PanelMuted.TLabel", wraplength=900).grid(row=5, column=0, sticky="w", pady=(12, 0))
+        self._label(settings, "Evita el oscurecimiento de Blind en la ruta visual verificada. "
+                    "Registra el efecto y las comprobaciones y bloqueos visuales.",
+                    style="PanelMuted.TLabel", wraplength=900).grid(row=6, column=0, sticky="w", pady=(12, 0))
+        self._label(settings, "Silenced es experimental. Intenta permitir la habilidad evitando sólo su filtro local. "
+                    "Mantiene el coste de maná y el enfriamiento normales. Registra el efecto y las omisiones del filtro local.",
+                    style="PanelMuted.TLabel", wraplength=900).grid(row=7, column=0, sticky="w", pady=(12, 0))
         self.quiet_reason_var = tk.StringVar(self.root, "" if QUIET_SUPPORTED else QUIET_UNSUPPORTED_REASON)
         self._label(settings, textvariable=self.quiet_reason_var, style="PanelMuted.TLabel", wraplength=900).grid(
-                        row=4, column=0, sticky="w", pady=(12, 0))
-        self.config_widgets.extend((self.debuffs_enabled_check, self.confuse_check, self.quiet_check))
+                        row=8, column=0, sticky="w", pady=(12, 0))
+        self.config_widgets.extend((self.debuffs_enabled_check, self.confuse_check, self.blind_check, self.silenced_check, self.quiet_check))
         self._autosave_status(p, 3)
 
     def _draft_changed(self, *unused):
@@ -442,7 +532,6 @@ class App:
         locked = self.closing or self.updates_panel.installing
         for widget in self.config_widgets:
             widget.configure(state="disabled" if locked else "normal")
-        self.quiet_check.configure(state="normal" if not locked and QUIET_SUPPORTED else "disabled")
         self.key_combo.configure(state="readonly" if not locked and self.draft.nexus_enabled.get()
                                  and not self.draft.detect_game_keys.get() else "disabled")
         self.start_button.configure(state="normal" if not running and not locked and self.cleanup_complete and self.draft.any_module_enabled() else "disabled")
@@ -568,6 +657,14 @@ class App:
         self.live_vars["logging"].set("Registro reciente: máx. 3 MiB")
         self.live_vars["autoaim"].set("Esperando datos del juego…" if config.autoaim.enabled else "AutoAim desactivado")
         self.live_vars["debuffs"].set("Esperando datos del juego…" if config.debuffs.enabled else "Debuffs desactivado")
+        self.live_vars["confuse"].set("Esperando datos del registro" if config.debuffs.enabled
+                                      and config.debuffs.confuse else "Registro desactivado")
+        self.live_vars["blind"].set("Esperando datos del registro" if config.debuffs.enabled
+                                    and config.debuffs.blind else "Registro desactivado")
+        self.live_vars["silenced"].set("Esperando datos · experimental; aceptación del juego pendiente" if config.debuffs.enabled
+                                       and config.debuffs.silenced else "Registro desactivado")
+        self.live_vars["quiet"].set("Esperando datos · no protege contra Quiet" if config.debuffs.enabled
+                                    and config.debuffs.record_quiet else "Registro desactivado · no protege contra Quiet")
         if not config.autonexus_enabled:
             self.live_vars["decision"].set("AutoNexus desactivado")
         self.live_vars["applied"].set("Esperando confirmación de la configuración en el juego…")
@@ -701,6 +798,9 @@ class App:
                 self._runtime_finished_seen = True
                 self.cleanup_complete = record.get("cleanup_complete") is True
                 self.status_var.set("Detenido" if self.cleanup_complete and record.get("code") == 0 else "Error")
+                for module in DEBUFF_OBSERVATIONS.values():
+                    key = module.lower()
+                    self.live_vars[key].set(display_text("Último estado de sesión (histórico) · " + self.live_vars[key].get()))
                 if record.get("errors"):
                     errors = record["errors"]
                     text = "; ".join(display_text(item, 180) for item in errors[:8]) if isinstance(errors, (list, tuple)) else errors
@@ -791,21 +891,19 @@ class App:
                     text = "Activo" if debuffs.get("active") is True else "Sin intervención" if debuffs.get("active") is False else "Estado sin confirmar"
                     if isinstance(debuffs.get("confuse"), bool):
                         text += " · Confuse" + (" sí" if debuffs["confuse"] else " no")
-                    if not QUIET_SUPPORTED or debuffs.get("quiet_supported") is False:
-                        text += " · Quiet no disponible"
-                    elif isinstance(debuffs.get("quiet"), bool):
-                        text += " · Quiet" + (" sí" if debuffs["quiet"] else " no")
-                    for key, label in (("checks", "comprobaciones"), ("blocked", "bloqueos")):
-                        value = debuffs.get(key)
-                        if isinstance(value, int) and not isinstance(value, bool):
-                            text += " · " + label + " " + display_text(value, 24)
-                    if debuffs.get("quiet_reason"):
-                        text += " · " + display_text(debuffs["quiet_reason"], 180)
+                    if isinstance(debuffs.get("blind"), bool):
+                        text += " · Blind" + (" sí" if debuffs["blind"] else " no")
+                    if isinstance(debuffs.get("silenced"), bool):
+                        text += " · Silenced experimental" + (" sí" if debuffs["silenced"] else " no")
+                    if isinstance(debuffs.get("record_quiet"), bool):
+                        text += " · Quiet registro" + (" sí" if debuffs["record_quiet"] else " no")
                     if debuffs.get("status"):
                         text += " · " + display_text(debuffs["status"], 160)
                     if debuffs.get("error"):
                         text += " · " + display_text(debuffs["error"], 240)
                 self.live_vars["debuffs"].set(display_text(text))
+                for field, module in DEBUFF_OBSERVATIONS.items():
+                    self.live_vars[module.lower()].set(debuff_observation_text(debuffs.get(field), module))
 
     def _can_install_update(self):
         if self.runtime_thread is not None:

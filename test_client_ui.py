@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from client_ui import App, RuntimeInbox
+from client_ui import App, RuntimeInbox, debuff_observation_text
 from debuffs_settings import QUIET_SUPPORTED, QUIET_UNSUPPORTED_REASON
 from game_settings import GameBinding
 from bot_runtime import SUPPORTED_GAMEASSEMBLY_SHA256, config_to_mapping
@@ -39,12 +39,43 @@ class InboxTests(unittest.TestCase):
             inbox.put({"event": "prediction_transport", "events": [{"kind": "damage", "amount": index}]})
         inbox.put({"event": "lifecycle", "status": "finished", "cleanup_complete": True})
         inbox.put({"event": "logging_warning", "logging_enabled": False, "error": "Disco lleno"})
+        inbox.put({"event": "quiet_observation", "quiet_observation": {"revision": 2, "last_episode": {"state": "ended"}}})
         critical, telemetry, notes, damage = inbox.drain()
         self.assertEqual([item["event"] for item in critical], ["lifecycle", "logging_warning"])
         self.assertEqual(telemetry["sequence"], 499)
         self.assertEqual(damage, 499)
         self.assertEqual(len(notes), 160)
+        self.assertIn("Registro de Quiet", notes[-1])
         self.assertEqual(inbox.drain(), ([], None, [], 499))
+
+    def test_debuff_diagnostic_burst_is_bounded_and_cannot_block_critical_delivery(self):
+        inbox = RuntimeInbox()
+        with patch.object(inbox.critical, "put", side_effect=AssertionError("Diagnostics must not wait on the critical queue")):
+            for revision in range(500):
+                for field in ("quiet_observation", "confuse_observation", "blind_observation", "silenced_observation"):
+                    inbox.put({"event": field, field: {
+                        "enabled": True, "revision": revision, "fresh": False,
+                        "detections": revision, "error": "x" * 2000}})
+        inbox.put({"event": "cleanup", "complete": True})
+        inbox.put({"event": "lifecycle", "status": "finished", "cleanup_complete": True})
+        critical, _, notes, _ = inbox.drain()
+        self.assertEqual([item["event"] for item in critical], ["cleanup", "lifecycle"])
+        self.assertEqual(len(notes), 160)
+        self.assertIn("intervalos detectados 499", notes[-1])
+        self.assertIn("Registro de Quiet", notes[-4])
+        self.assertIn("Registro de Confuse", notes[-3])
+        self.assertIn("Registro de Blind", notes[-2])
+        self.assertIn("Registro de Silenced", notes[-1])
+        self.assertTrue(all(len(note) < 800 for note in notes))
+
+    def test_final_diagnostic_warning_is_a_bounded_note(self):
+        inbox = RuntimeInbox()
+        inbox.put({"event": "diagnostic_warning", "module": "Debuffs", "error": "x" * 2000})
+        critical, _, notes, _ = inbox.drain()
+        self.assertEqual(critical, [])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Aviso del registro de Debuffs", notes[0])
+        self.assertLess(len(notes[0]), 300)
 
 
 class ClientTests(unittest.TestCase):
@@ -90,7 +121,7 @@ class ClientTests(unittest.TestCase):
                     self.worker_ids.append(threading.get_ident())
                     on_update({"event": "config_applied", "revision": revision,
                                "configuration": config_to_mapping(configured)})
-                    if not (configured.autonexus_enabled or configured.autoaim.enabled or configured.debuffs.has_protection):
+                    if not (configured.autonexus_enabled or configured.autoaim.enabled or configured.debuffs.has_work):
                         on_update({"event": "stop_requested", "reason": "no_enabled_modules"})
                         break
             self.cleanup_started.set()
@@ -161,6 +192,27 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(belongs_to(self.app.prioritize_bosses_check, self.app.aim_tab))
         self.assertTrue(belongs_to(self.app.nexus_enabled_check, self.app.nexus_tab))
         self.assertTrue(belongs_to(self.app.quiet_check, self.app.debuffs_tab))
+        quiet_checks = [widget for widget in descendants(self.app.debuffs_tab)
+                        if isinstance(widget, ttk.Checkbutton) and widget.cget("text").startswith("Quiet")]
+        self.assertEqual(quiet_checks, [self.app.quiet_check])
+        self.assertEqual(self.app.quiet_check.cget("text"), "Quiet")
+        self.assertEqual(self.app.confuse_check.cget("text"), "Confuse")
+        confuse_checks = [widget for widget in descendants(self.app.debuffs_tab)
+                          if isinstance(widget, ttk.Checkbutton) and widget.cget("text").startswith("Confuse")]
+        self.assertEqual(confuse_checks, [self.app.confuse_check])
+        blind_checks = [widget for widget in descendants(self.app.debuffs_tab)
+                        if isinstance(widget, ttk.Checkbutton) and widget.cget("text").startswith("Blind")]
+        self.assertEqual(blind_checks, [self.app.blind_check])
+        self.assertEqual(self.app.blind_check.cget("text"), "Blind")
+        silenced_checks = [widget for widget in descendants(self.app.debuffs_tab)
+                           if isinstance(widget, ttk.Checkbutton) and widget.cget("text").startswith("Silenced")]
+        self.assertEqual(silenced_checks, [self.app.silenced_check])
+        self.assertEqual(self.app.silenced_check.cget("text"), "Silenced")
+        help_text = " ".join(str(widget.cget("text"))
+                             for widget in descendants(self.app.debuffs_tab)
+                             if isinstance(widget, ttk.Label))
+        self.assertIn("No bloquea Quiet", help_text)
+        self.assertIn("Silenced es experimental", help_text)
 
     def test_navigation_uses_one_draft_and_never_starts_runtime_from_config_or_updates(self):
         draft = self.app.draft
@@ -206,7 +258,10 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(draft.aim_enabled.get())
         self.assertFalse(draft.debuffs_enabled.get())
         self.assertTrue(draft.confuse.get())
-        self.assertFalse(draft.quiet.get())
+        self.assertFalse(draft.blind.get())
+        self.assertFalse(draft.silenced.get())
+        self.assertFalse(hasattr(draft, "quiet"))
+        self.assertFalse(draft.record_quiet.get())
         self.assertFalse(draft.prioritize_bosses.get())
         self.assertFalse(draft.ignore_walls.get())
         self.assertEqual(draft.extrapolation.get(), "302")
@@ -259,11 +314,14 @@ class ClientTests(unittest.TestCase):
 
     def test_each_module_can_start_independently_from_the_other_two(self):
         draft = self.app.draft
-        for selected in ("nexus_enabled", "aim_enabled", "debuffs_enabled"):
+        for selected in ("nexus_enabled", "aim_enabled", "debuffs_enabled", "blind", "silenced"):
             with self.subTest(module=selected):
                 draft.nexus_enabled.set(selected == "nexus_enabled")
                 draft.aim_enabled.set(selected == "aim_enabled")
-                draft.debuffs_enabled.set(selected == "debuffs_enabled")
+                draft.debuffs_enabled.set(selected in ("debuffs_enabled", "blind", "silenced"))
+                draft.confuse.set(selected == "debuffs_enabled")
+                draft.blind.set(selected == "blind")
+                draft.silenced.set(selected == "silenced")
                 self.assertEqual(str(self.app.start_button.cget("state")), "normal")
                 self.assertTrue(self.app.start_live())
                 self.pump_until(lambda: self.app.status_var.get() == "Activo")
@@ -271,7 +329,10 @@ class ClientTests(unittest.TestCase):
                 self.assertTrue(active)
                 self.assertEqual(config.autonexus_enabled, selected == "nexus_enabled")
                 self.assertEqual(config.autoaim.enabled, selected == "aim_enabled")
-                self.assertEqual(config.debuffs.enabled, selected == "debuffs_enabled")
+                self.assertEqual(config.debuffs.enabled, selected in ("debuffs_enabled", "blind", "silenced"))
+                self.assertEqual(config.debuffs.confuse, selected == "debuffs_enabled")
+                self.assertEqual(config.debuffs.blind, selected == "blind")
+                self.assertEqual(config.debuffs.silenced, selected == "silenced")
                 self.assertEqual(str(self.app.threshold_input.cget("state")), "normal")
                 self.app.stop_live()
                 self.release_cleanup.set()
@@ -284,7 +345,9 @@ class ClientTests(unittest.TestCase):
         draft.aim_enabled.set(True)
         draft.debuffs_enabled.set(True)
         draft.confuse.set(False)
-        draft.quiet.set(False)
+        draft.blind.set(True)
+        draft.silenced.set(True)
+        draft.record_quiet.set(True)
         self.assertTrue(self.app.flush_configuration())
         window = tk.Toplevel(self.root)
         window.withdraw()
@@ -295,7 +358,10 @@ class ClientTests(unittest.TestCase):
             self.assertTrue(config.autoaim.enabled)
             self.assertTrue(config.debuffs.enabled)
             self.assertFalse(config.debuffs.confuse)
+            self.assertTrue(config.debuffs.blind)
+            self.assertTrue(config.debuffs.silenced)
             self.assertFalse(config.debuffs.quiet)
+            self.assertTrue(config.debuffs.record_quiet)
         finally:
             restored.close()
 
@@ -321,21 +387,22 @@ class ClientTests(unittest.TestCase):
     def test_debuff_telemetry_keeps_unknown_state_and_error_visible(self):
         self.app._handle_runtime_record({"event": "telemetry", "debuffs": {
             "enabled": True, "active": None, "confuse": True, "quiet": False,
-            "quiet_supported": False, "quiet_reason": QUIET_UNSUPPORTED_REASON,
+            "record_quiet": True, "quiet_supported": False, "quiet_reason": QUIET_UNSUPPORTED_REASON,
             "checks": 8, "blocked": 2, "error": "Fixture pendiente"}})
         self.assertIn("Estado sin confirmar", self.app.live_vars["debuffs"].get())
         self.assertIn("Confuse sí", self.app.live_vars["debuffs"].get())
-        self.assertIn("Quiet no disponible", self.app.live_vars["debuffs"].get())
-        self.assertIn("comprobaciones 8", self.app.live_vars["debuffs"].get())
-        self.assertIn("bloqueos 2", self.app.live_vars["debuffs"].get())
-        self.assertIn(QUIET_UNSUPPORTED_REASON, self.app.live_vars["debuffs"].get())
+        self.assertIn("Quiet registro sí", self.app.live_vars["debuffs"].get())
+        self.assertNotIn("comprobaciones", self.app.live_vars["debuffs"].get())
+        self.assertNotIn("bloqueos", self.app.live_vars["debuffs"].get())
+        self.assertNotIn(QUIET_UNSUPPORTED_REASON, self.app.live_vars["debuffs"].get())
         self.assertIn("Fixture pendiente", self.app.live_vars["debuffs"].get())
+        self.assertIn("Esperando datos del registro", self.app.live_vars["confuse"].get())
 
-    def test_quiet_is_unavailable_and_does_not_count_as_a_supported_protection(self):
+    def test_quiet_checkbox_records_without_enabling_unsupported_protection(self):
         draft = self.app.draft
         self.assertFalse(QUIET_SUPPORTED)
-        self.assertFalse(draft.quiet.get())
-        self.assertEqual(str(self.app.quiet_check.cget("state")), "disabled")
+        self.assertFalse(draft.record_quiet.get())
+        self.assertEqual(str(self.app.quiet_check.cget("state")), "normal")
         self.assertEqual(self.app.quiet_reason_var.get(), QUIET_UNSUPPORTED_REASON)
         draft.nexus_enabled.set(False)
         draft.aim_enabled.set(False)
@@ -345,16 +412,172 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(str(self.app.start_button.cget("state")), "disabled")
         self.assertFalse(self.app.start_live())
         self.assertTrue(self.app.flush_configuration())
-        draft.quiet.set(True)  # Even a programmatic edit cannot enable unsupported behavior.
-        self.assertFalse(draft.any_module_enabled())
-        with self.assertRaisesRegex(ValueError, "AntiQuiet no disponible"):
-            draft.validate()
-        draft.quiet.set(False)
-        draft.confuse.set(True)
+        self.app.quiet_check.invoke()
+        self.assertTrue(draft.record_quiet.get())
         self.assertTrue(draft.any_module_enabled())
+        self.assertFalse(draft.validate().debuffs.quiet)
+        self.assertFalse(draft.validate().debuffs.has_protection)
         self.assertEqual(str(self.app.start_button.cget("state")), "normal")
-        self.assertEqual(str(self.app.quiet_check.cget("state")), "disabled")
+        self.assertEqual(str(self.app.quiet_check.cget("state")), "normal")
         self.assertEqual(self.calls, [])
+
+    def test_quiet_recording_alone_can_start_and_apply_live_without_enabling_protection(self):
+        draft = self.app.draft
+        draft.nexus_enabled.set(False)
+        draft.aim_enabled.set(False)
+        draft.debuffs_enabled.set(True)
+        draft.confuse.set(False)
+        draft.record_quiet.set(True)
+        self.assertTrue(draft.any_module_enabled())
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        worker = self.app.runtime_thread
+        self.assertTrue(self.app.applied_config.debuffs.record_quiet)
+        self.assertFalse(self.app.applied_config.debuffs.has_protection)
+        self.assertIn("no protege", self.app.live_vars["quiet"].get())
+        draft.confuse.set(True)
+        self.assertTrue(self.app.flush_configuration())
+        self.pump_until(lambda: self.app.applied_config.debuffs.confuse)
+        draft.blind.set(True)
+        draft.confuse.set(False)
+        self.assertTrue(self.app.flush_configuration())
+        self.pump_until(lambda: self.app.applied_config.debuffs.blind and not self.app.applied_config.debuffs.confuse)
+        draft.silenced.set(True)
+        draft.blind.set(False)
+        self.assertTrue(self.app.flush_configuration())
+        self.pump_until(lambda: self.app.applied_config.debuffs.silenced and not self.app.applied_config.debuffs.blind)
+        draft.record_quiet.set(False)
+        self.assertTrue(self.app.flush_configuration())
+        self.pump_until(lambda: not self.app.applied_config.debuffs.record_quiet)
+        self.assertIs(worker, self.app.runtime_thread)
+        self.assertEqual(len(self.calls), 1)
+        self.assertFalse(json.loads(self.config_path.read_text(encoding="utf-8"))["debuffs"]["record_quiet"])
+
+    def test_quiet_observation_shows_fresh_and_historical_facts_without_claiming_protection(self):
+        observation = {"enabled": True, "available": True, "fresh": True, "age_ms": 3,
+                       "revision": 1, "detections": 1,
+                       "current": {"quiet": True, "mp": 0, "mp_sync": 305, "mp_override": True},
+                       "last_episode": {"state": "active", "latest": {"mp": 0, "mp_sync": 305}}}
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"quiet_observation": observation}})
+        current = self.app.live_vars["quiet"].get()
+        self.assertIn("Quiet detectado", current)
+        self.assertIn("episodios 1", current)
+        self.assertIn("MP 0", current)
+        self.assertIn("MP de respaldo 305", current)
+        self.assertIn("override MP sí", current)
+        self.assertIn("no protege", current)
+        stale = dict(observation, fresh=False, current=None, age_ms=None, error="Lectura pendiente",
+                     last_episode={"state": "interrupted", "end_reason": "map_changed", "latest": {"mp": 0}})
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"quiet_observation": stale}})
+        historical = self.app.live_vars["quiet"].get()
+        self.assertIn("Esperando datos recientes", historical)
+        self.assertIn("histórica", historical)
+        self.assertIn("interrumpido", historical)
+        self.assertIn("Lectura pendiente", historical)
+        self.assertNotIn("Quiet detectado", historical)
+        self.app.runtime_inbox.put({"event": "quiet_observation", "quiet_observation": observation})
+        self.app._consume_runtime_inbox()
+        self.assertEqual(self.app.live_vars["quiet"].get(), historical)
+        self.assertIn("Registro de Quiet", self.app.live_log.get("1.0", "end"))
+        self.assertIn("no disponible", debuff_observation_text({"enabled": True, "available": False, "error": "Sin campo MP"}, "Quiet"))
+        self.assertIn("desactivado", debuff_observation_text({"enabled": False}, "Quiet"))
+        self.app._handle_runtime_record({"event": "lifecycle", "status": "finished", "cleanup_complete": True, "code": 0})
+        self.assertIn("Último estado de sesión (histórico)", self.app.live_vars["quiet"].get())
+
+    def test_confuse_observation_separates_detected_intervals_and_movement_blocks(self):
+        observation = {"enabled": True, "available": True, "fresh": True, "age_ms": 3,
+                       "revision": 3, "detections": 2,
+                       "current": {"confuse": True, "movement_checks": 128,
+                                   "movement_detections": 3, "movement_blocks": 0},
+                       "last_episode": {"state": "active"}}
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"confuse_observation": observation}})
+        current = self.app.live_vars["confuse"].get()
+        self.assertIn("Confuse detectado", current)
+        self.assertIn("intervalos detectados 2", current)
+        self.assertIn("comprobaciones 128", current)
+        self.assertIn("detecciones 3", current)
+        self.assertIn("bloqueos 0", current)
+        self.assertNotIn("MP", current)
+        self.assertNotIn("protección activa", current)
+        stale = dict(observation, fresh=False, current=None, age_ms=None, last_episode={
+            "state": "interrupted", "end_reason": "stale", "latest": observation["current"]})
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"confuse_observation": stale}})
+        historical = self.app.live_vars["confuse"].get()
+        self.assertIn("Esperando datos recientes", historical)
+        self.assertIn("histórica", historical)
+        self.assertIn("interrumpido", historical)
+        self.assertNotIn("Confuse detectado", historical)
+        self.app.runtime_inbox.put({"event": "confuse_observation", "confuse_observation": observation})
+        self.app._consume_runtime_inbox()
+        self.assertEqual(self.app.live_vars["confuse"].get(), historical)
+        self.assertIn("Registro de Confuse", self.app.live_log.get("1.0", "end"))
+        self.app._handle_runtime_record({"event": "lifecycle", "status": "finished", "cleanup_complete": True, "code": 0})
+        self.assertIn("Último estado de sesión (histórico)", self.app.live_vars["confuse"].get())
+
+    def test_blind_observation_separates_visual_calls_from_detected_intervals(self):
+        observation = {"enabled": True, "available": True, "fresh": True, "detections": 2,
+                       "current": {"blind": True, "visual_checks": 250, "visual_detections": 4, "visual_blocks": 0,
+                                   "movement_checks": 999, "movement_detections": 888, "movement_blocks": 777},
+                       "last_episode": {"state": "active"}}
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"blind_observation": observation}})
+        current = self.app.live_vars["blind"].get()
+        self.assertIn("Blind detectado", current)
+        self.assertIn("intervalos detectados 2", current)
+        self.assertIn("visión: comprobaciones 250", current)
+        self.assertIn("detecciones 4", current)
+        self.assertIn("bloqueos 0", current)
+        self.assertNotIn("999", current)
+        self.assertNotIn("movimiento", current)
+        self.assertNotIn("MP", current)
+        self.assertNotIn("protección activa", current)
+        stale = dict(observation, fresh=False, current=None, last_episode={
+            "state": "interrupted", "end_reason": "player_changed", "latest": observation["current"]})
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"blind_observation": stale}})
+        historical = self.app.live_vars["blind"].get()
+        self.assertIn("Esperando datos recientes", historical)
+        self.assertIn("histórica", historical)
+        self.assertIn("interrumpido", historical)
+        self.assertNotIn("Blind detectado", historical)
+        self.app.runtime_inbox.put({"event": "blind_observation", "blind_observation": observation})
+        self.app._consume_runtime_inbox()
+        self.assertEqual(self.app.live_vars["blind"].get(), historical)
+        self.assertIn("Registro de Blind", self.app.live_log.get("1.0", "end"))
+        self.app._handle_runtime_record({"event": "lifecycle", "status": "finished", "cleanup_complete": True, "code": 0})
+        self.assertIn("Último estado de sesión (histórico)", self.app.live_vars["blind"].get())
+
+    def test_silenced_observation_measures_only_local_gate_consultations_and_bypasses(self):
+        observation = {"enabled": True, "available": True, "fresh": True, "detections": 2,
+                       "current": {"silenced": True, "condition_word1": 65536,
+                                   "ability_gate_checks": 13, "ability_gate_detections": 4, "ability_gate_bypasses": 0,
+                                   "visual_checks": 999, "movement_blocks": 888},
+                       "last_episode": {"state": "active"}}
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"silenced_observation": observation}})
+        current = self.app.live_vars["silenced"].get()
+        self.assertIn("Silenced detectado", current)
+        self.assertIn("intervalos detectados 2", current)
+        self.assertIn("filtro local de habilidad: consultas 13", current)
+        self.assertIn("detecciones 4", current)
+        self.assertIn("omisiones 0", current)
+        self.assertIn("experimental; aceptación del juego pendiente", current)
+        self.assertNotIn("999", current)
+        self.assertNotIn("888", current)
+        self.assertNotIn("habilidades usadas", current)
+        self.assertNotIn("habilidad aceptada", current)
+        unknown = dict(observation, current={"silenced": None, "condition_word1": 65536})
+        self.assertIn("Silenced sin confirmar", debuff_observation_text(unknown, "Silenced"))
+        stale = dict(observation, fresh=False, current=None, last_episode={
+            "state": "interrupted", "end_reason": "player_changed", "latest": observation["current"]})
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {"silenced_observation": stale}})
+        historical = self.app.live_vars["silenced"].get()
+        self.assertIn("Esperando datos recientes", historical)
+        self.assertIn("histórica", historical)
+        self.assertNotIn("Silenced detectado", historical)
+        self.app.runtime_inbox.put({"event": "silenced_observation", "silenced_observation": observation})
+        self.app._consume_runtime_inbox()
+        self.assertEqual(self.app.live_vars["silenced"].get(), historical)
+        self.assertIn("Registro de Silenced", self.app.live_log.get("1.0", "end"))
+        self.app._handle_runtime_record({"event": "lifecycle", "status": "finished", "cleanup_complete": True, "code": 0})
+        self.assertIn("Último estado de sesión (histórico)", self.app.live_vars["silenced"].get())
 
     def test_invalid_parameters_never_start_runtime(self):
         draft = self.app.draft
@@ -383,7 +606,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(config.autoaim.activation, "autofire")
         self.assertEqual(config.autoaim.extrapolation, 150)
         for widget in self.app.config_widgets:
-            self.assertEqual(str(widget.cget("state")), "disabled" if widget is self.app.quiet_check else "normal")
+            self.assertEqual(str(widget.cget("state")), "normal")
         worker = self.app.runtime_thread
         self.allow_apply.clear()
         draft.threshold.set("10")

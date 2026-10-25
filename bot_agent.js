@@ -62,7 +62,7 @@ function invalidateLifecycle() {
     clearScopes();
     if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
     if (autoaimBridge !== null) autoaimBridge.invalidate();
-    if (debuffsBridge !== null) debuffsBridge.invalidate();
+    if (debuffsBridge !== null) debuffsBridge.invalidate('world_lifecycle');
 }
 
 function stop() {
@@ -74,8 +74,13 @@ function stop() {
     clearScopes();
     if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
     if (autoaimBridge !== null) autoaimBridge.invalidate();
-    if (debuffsBridge !== null) debuffsBridge.invalidate();
-    return { stopped: true, hooks_detached: detachOwnedHooks() };
+    if (debuffsBridge !== null) debuffsBridge.invalidate('stopped');
+    const receipt = { stopped: true, hooks_detached: detachOwnedHooks() };
+    // Preserve an interrupted recording after hooks are released. Diagnostic
+    // serialization cannot prevent owned resource cleanup or report it failed.
+    try { receipt.debuffs = debuffsBridge === null ? null : debuffsBridge.snapshot(); }
+    catch (error) { receipt.diagnostics_error = String(error.stack || error); }
+    return receipt;
 }
 
 function validateBridgeOptions(options) {
@@ -445,7 +450,7 @@ function start(options = {}) {
             latest = null; activeAssociation = null; clearScopes();
             if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
             if (autoaimBridge !== null) autoaimBridge.invalidate();
-            if (debuffsBridge !== null) debuffsBridge.invalidate();
+            if (debuffsBridge !== null) debuffsBridge.invalidate('association_unavailable');
             return;
         }
         let mapId = null;
@@ -454,13 +459,14 @@ function start(options = {}) {
                 epoch += 1; clearScopes();
                 if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
                 if (autoaimBridge !== null) autoaimBridge.invalidate();
-                if (debuffsBridge !== null) debuffsBridge.invalidate();
+                if (debuffsBridge !== null) debuffsBridge.invalidate('map_changed');
             }
             lastIdentity = observed.identity;
             mapId = JSON.stringify([epoch, observed.world.toString(), observed.player.toString(), observed.name]);
         }
         activeAssociation = mapId === null ? null : { gui, player: observed.player, world: observed.world,
-            identity: observed.identity, map_id: mapId, gui_seen_at: now };
+            identity: observed.identity, map_id: mapId, gui_seen_at: now,
+            map_name: observed.name, hp: observed.hp, max_hp: observed.maximum };
         if (autoaimBridge !== null && autoaimBridge.capture) autoaimBridge.capture(activeAssociation);
         if (debuffsBridge !== null) debuffsBridge.capture(activeAssociation);
         publish(healthFrame(observed, mapId), now);

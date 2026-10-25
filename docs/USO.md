@@ -44,7 +44,24 @@ El puente modifica el punto de puntería de la ruta investigada de proyectiles. 
 
 En **Debuffs**, marca **Activar módulo Debuffs** y **Confuse**. La protección bloquea la transformación de dirección y rotación de tus controles en la ruta de movimiento verificada del jugador local. Los iconos y las condiciones conservan su representación normal. Requiere el juego en primer plano y datos recientes del personaje.
 
-**Quiet** queda desmarcado y deshabilitado: no se verificó una ruta que evite sus efectos sobre maná y habilidades. Esta versión no bloquea Quiet ni recupera MP. AntiConfuse tiene validación estática y pruebas con interfaces nativas simuladas; falta comprobarlo con el efecto real en el juego.
+El mismo checkbox registra Confuse. En **Juego en vivo**, **Registro de Confuse** muestra el efecto detectado, el último intervalo y los contadores de la ruta de movimiento. Un intervalo detectado no equivale a un bloqueo: para verificar la protección tienes que moverte con el efecto presente y el juego al frente. Los datos se guardan en los logs recientes junto con Quiet. No hace falta iniciar otra sesión de diagnóstico.
+
+Puedes marcar también **Blind** para evitar su oscurecimiento en la ruta visual verificada. Es independiente de Confuse, empieza desmarcado y sus cambios se guardan y aplican en vivo. **Registro de Blind**, en Juego en vivo, muestra los intervalos y los contadores visuales. El icono del estado puede permanecer. El usuario informó una prueba satisfactoria en su instalación.
+
+**Silenced** intenta permitir la habilidad omitiendo sólo su filtro local de Silenced. Empieza desmarcado y se guarda y aplica en vivo. No evita el coste normal de maná ni el enfriamiento. Una prueba manual de 0.4.4 tuvo un resultado exitoso confirmado por el usuario, con Silenced y omisiones del filtro registrados durante el episodio. Sigue siendo experimental; comprueba el efecto práctico de tu habilidad. El icono puede permanecer.
+
+Para probarlo, activa Debuffs y esa casilla, inicia el bot y mantén el juego al frente. Cuando recibas Silenced, intenta usar una habilidad con maná suficiente y sin enfriamiento. Comprueba el resultado práctico y revisa **Registro de Silenced**. Las omisiones del filtro sólo prueban una intervención local; no acreditan que la habilidad haya sido aceptada.
+
+La protección contra **Quiet** aún no está disponible: no se verificó una ruta que evite sus efectos sobre maná y habilidades. Esta versión no bloquea Quiet ni recupera MP. Su casilla permite registrar una prueba. AntiConfuse y AntiBlind tienen validación estática, pruebas con interfaces nativas simuladas y pruebas satisfactorias informadas por el usuario en su instalación.
+
+Para probar Quiet desde las fuentes:
+
+1. Marca **Activar módulo Debuffs** y **Quiet**. Los cambios se guardan y aplican en vivo.
+2. Inicia el bot desde **Juego en vivo** si estaba detenido. Puedes usar el registro solo o junto con tus otros módulos.
+3. Juega normalmente. La fila **Registro de Quiet** muestra la detección, el maná local, su respaldo y el último intervalo observado.
+4. Cuando recibas Quiet, observa si el maná llega a cero y prueba una vez la habilidad. Comunica lo que ocurrió y conserva los logs recientes.
+
+La casilla **Quiet** recoge datos; no impide el efecto. Si se corta la lectura, cambias de mapa o apagas el registro, la interfaz conserva el último intervalo como interrumpido. El historial usa los mismos tres archivos limitados del bot. Un fallo de este registro se muestra sin desactivar AutoNexus.
 
 ## Cambiar ajustes y guardado automático
 

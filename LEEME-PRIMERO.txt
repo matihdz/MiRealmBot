@@ -1,4 +1,4 @@
-MiRealmBot 0.4.0 - Inicio rápido
+MiRealmBot 0.4.4 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
@@ -43,12 +43,30 @@ AUTOAIM OPCIONAL
 - Extrapolation 0 usa la posición actual; valores mayores adelantan más.
 
 DEBUFFS
-- Marca "Activar módulo Debuffs" y "Confuse" para proteger los controles
-  del jugador local en la ruta de movimiento verificada.
-- Quiet está deshabilitado: no se verificó una forma de evitar sus efectos
-  sobre maná y habilidades. Esta versión no recupera MP ni bloquea Quiet.
-- AntiConfuse tiene análisis estático y pruebas simuladas; falta probarlo
-  con el efecto real en el juego.
+- Marca "Activar módulo Debuffs" y "Confuse" para proteger los controles del jugador local y registrar el efecto.
+- "Registro de Confuse", en Juego en vivo, muestra detecciones, último
+  intervalo y contadores de movimiento. Detectar el efecto no demuestra un
+  bloqueo: comprueba cómo te mueves mientras tengas Confuse y el juego al frente.
+- "Blind" es independiente y empieza
+  desmarcado. Evita el oscurecimiento en la ruta visual verificada y añade
+  "Registro de Blind" a Juego en vivo. El icono puede seguir presente.
+- "Silenced" empieza desmarcado.
+  Omite el filtro local investigado de Silenced. Mantiene el coste de maná,
+  el enfriamiento y los demás filtros. Una prueba manual de 0.4.4 tuvo un
+  resultado exitoso confirmado por el usuario. Sigue siendo experimental;
+  comprueba el efecto práctico de tu habilidad. El icono puede seguir presente.
+- "Registro de Silenced" muestra el estado y consultas/omisiones locales.
+  Las omisiones no cuentan habilidades usadas o aceptadas. Comprueba su efecto
+  práctico al recibir Silenced; no basta con ver una animación o gasto de MP.
+- La protección Quiet aún no está disponible: no se verificó una forma de
+  evitar sus efectos sobre maná y habilidades. No recupera MP ni lo bloquea.
+- La casilla "Quiet"
+  recoge el efecto y el maná mientras juegas. Marca también "Activar módulo
+  Debuffs" y revisa "Registro de Quiet" en Juego en vivo.
+- Puede usarse solo o junto con otros módulos. El historial conserva el
+  último intervalo observado dentro de los logs recientes limitados del bot.
+- AntiConfuse y AntiBlind tienen análisis estático, pruebas simuladas
+  y pruebas satisfactorias informadas por el usuario en su instalación.
 
 CONFIGURACIÓN
 - El archivo es mirealmbot.json. El primer inicio copia los ajustes antiguos

@@ -24,7 +24,7 @@ from autoaim_settings import AutoAimSettings, autoaim_mapping, parse_autoaim
 from autonexus_controller import Controller, HealthFrame
 from autonexus_core import Action, AutoNexus, Decision
 from damage_prediction import AcceptedHitPrediction, finite_age
-from debuffs_settings import DebuffSettings, debuffs_mapping, parse_debuffs
+from debuffs_settings import DEBUFF_OBSERVATIONS, DebuffSettings, debuffs_mapping, parse_debuffs
 from game_settings import unity_key_name
 from probe_game import EXPECTED_EXE, ProcessIdentity
 from runtime_logs import BoundedRuntimeLog, LOG_BASENAME
@@ -269,7 +269,9 @@ def deliver(decision: Decision, *, active: bool, pid: int, key: str,
     return result
 
 
-def cleanup_runtime(script: Any, session: Any, identity: Any) -> list[str]:
+def cleanup_runtime(script: Any, session: Any, identity: Any, *,
+                    on_stopped: Callable[[Any], None] | None = None) -> list[str]:
+    """Retire resources even when retaining the optional final diagnostic fails."""
     errors = []
     actions = []
     if script is not None:
@@ -281,9 +283,18 @@ def cleanup_runtime(script: Any, session: Any, identity: Any) -> list[str]:
         actions.append(("identity.close", identity.close))
     for name, action in actions:
         try:
-            action()
+            receipt = action()
         except Exception as error:
             errors.append(f"{name}: {error}")
+        else:
+            if name == "agent.stop" and on_stopped is not None:
+                try:
+                    on_stopped(receipt)
+                except Exception as error:
+                    # Metadata failure does not make detached hooks unknown and
+                    # cannot prevent unloading the remaining owned resources.
+                    print("No se pudo conservar el diagnóstico final; la limpieza continúa: "
+                          + str(error)[:240], file=sys.stderr)
     return errors
 
 
@@ -347,6 +358,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
     script_load_attempted = False
     session_id = uuid4().hex
     logging_failed = False
+    observation_revisions = {}
 
     def check_stop() -> None:
         if callback_error is not None:
@@ -395,11 +407,28 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
             disable_logging(error)
         notify(entry)
 
+    def record_debuff_observations(source: object) -> None:
+        debuffs = source.get("debuffs") if isinstance(source, dict) else None
+        for field in DEBUFF_OBSERVATIONS:
+            observation = debuffs.get(field) if isinstance(debuffs, dict) else None
+            revision = observation.get("revision") if isinstance(observation, dict) else None
+            if (isinstance(revision, int) and not isinstance(revision, bool)
+                    and revision >= 0 and revision != observation_revisions.get(field)):
+                # Native Debuffs supplies complete independent episode snapshots;
+                # transport does not reinterpret condition bits or infer authority.
+                observation_revisions[field] = revision
+                record(field, **{field: observation})
+
+    def record_stopped(receipt: object) -> None:
+        record_debuff_observations(receipt)
+        if isinstance(receipt, dict) and receipt.get("diagnostics_error"):
+            record("diagnostic_warning", module="Debuffs", error=str(receipt["diagnostics_error"])[:240])
+
     try:
         record("lifecycle", status="connecting", active=active)
         check_stop()
         config = config_from_mapping(config_to_mapping(config))
-        if not (config.autonexus_enabled or config.autoaim.enabled or config.debuffs.has_protection):
+        if not (config.autonexus_enabled or config.autoaim.enabled or config.debuffs.has_work):
             raise ValueError("Activa al menos un módulo antes de iniciar MiRealmBot")
         controller = Controller(AutoNexus(config.threshold,
                                          enabled=config.autonexus_enabled,
@@ -520,7 +549,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                     record("config_error", revision=revision, reason="invalid_configuration", error=str(error))
                 else:
                     if not (requested_config.autonexus_enabled or requested_config.autoaim.enabled
-                            or requested_config.debuffs.has_protection):
+                            or requested_config.debuffs.has_work):
                         # No further poll or action can run; normal finalization
                         # stops every native module without requiring configure.
                         config = requested_config
@@ -555,6 +584,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                     check_stop()
             payload = script.exports_sync.poll()
             check_stop()
+            record_debuff_observations(payload)
             resolved_key, binding_status = resolve_game_nexus_key(payload, config)
             # Keep collecting damage/health while waiting for the canonical
             # binding; do not consume a map's one-shot request with a guessed key.
@@ -632,7 +662,8 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         record("lifecycle", status="stopping", active=active)
         # A created but never loaded script cannot install hooks. Detaching its
         # session releases it without calling unavailable agent RPC exports.
-        errors = cleanup_runtime(script if script_load_attempted else None, session, identity)
+        errors = cleanup_runtime(script if script_load_attempted else None, session, identity,
+                                 on_stopped=record_stopped)
         record("cleanup", complete=not errors, errors=errors)
         for error in errors:
             print(f"Error de limpieza: {error}", file=sys.stderr)

@@ -1,6 +1,6 @@
 # MiRealmBot
 
-Cliente modular para **RotMG Exalt en Windows x64**. En **0.4.0** puedes activar AutoNexus, AutoAim y Debuffs por separado. **Iniciar bot** pone en marcha los módulos habilitados; los registros conservan sólo un historial reciente.
+Cliente modular para **RotMG Exalt en Windows x64**. Puedes activar AutoNexus, AutoAim y Debuffs por separado. La versión **0.4.4** incluye protección y registro para Confuse y Blind, bloqueo local experimental de Silenced y registro de Quiet para pruebas. **Iniciar bot** pone en marcha los módulos habilitados; los registros conservan sólo un historial reciente.
 
 **[Descargar MiRealmBot para Windows](https://github.com/matihdz/MiRealmBot/releases/latest)** · [Guía paso a paso](docs/USO.md)
 
@@ -25,7 +25,7 @@ Abrir el programa deja la sesión detenida. **Iniciar bot** activa los módulos 
 | **Juego en vivo** | Inicio y detención del bot, vida, mapa, decisiones y actividad reciente. |
 | **AutoNexus** | Activación, porcentaje de salida, predicción de daño y tecla de regreso al Nexus. |
 | **AutoAim** | Activación, Close to Mouse, Extrapolation, radio, prioridad de bosses y filtro de murallas. |
-| **Debuffs** | Protección frente a efectos de estado, con opciones por efecto. |
+| **Debuffs** | Confuse y Blind independientes, Silenced experimental y registro opcional de Quiet para pruebas. |
 | **Actualizaciones** | Buscar, descargar e instalar nuevas versiones desde GitHub. |
 
 La barra lateral, la reproducción de registros y los botones de guardado se retiraron. Las pestañas de configuración guardan y aplican los ajustes automáticamente; iniciar el bot se hace desde **Juego en vivo**.
@@ -51,11 +51,25 @@ Ambas opciones son independientes y empiezan desmarcadas. El puente ajusta el pu
 
 ## Debuffs
 
-Marca **Activar módulo Debuffs** y **Confuse** para bloquear la transformación de dirección y rotación de los controles del jugador local. La implementación se basa en análisis estático de RealmBot y del perfil actual del juego, y se probó con interfaces nativas simuladas. Falta una prueba real de Confuse en el juego.
+Marca **Activar módulo Debuffs** y **Confuse** para bloquear la transformación de dirección y rotación de los controles del jugador local y registrar el efecto. La implementación se basa en análisis estático de RealmBot y del perfil actual del juego, y se probó con interfaces nativas simuladas. El usuario informó una prueba satisfactoria en su instalación.
 
 El hook afecta únicamente al resultado booleano de la llamada de movimiento verificada. No borra las condiciones, sus iconos ni otros consumidores del estado. Requiere el juego en primer plano y una asociación reciente y válida con tu personaje.
 
-**Quiet** aparece desmarcado y deshabilitado: todavía no se verificó una ruta que evite su efecto sobre maná y habilidades. Esta versión no ofrece protección AntiQuiet ni recupera MP.
+**Registro de Confuse**, en Juego en vivo, muestra si el estado se detecta y los contadores acumulados de comprobaciones, detecciones y bloqueos en la llamada de movimiento. También conserva el último intervalo con muestras antes, durante y después, o indica si la lectura se interrumpió. Detectar el estado y bloquear una llamada de movimiento son hechos distintos: ver el efecto mientras estás quieto o con el juego fuera del primer plano no confirma un bloqueo. Comprueba el movimiento cuando recibas el efecto y comunica el resultado junto con los logs recientes.
+
+**Blind** es una casilla independiente, desactivada por defecto. Suprime el resultado que activa el oscurecimiento en las llamadas verificadas del controlador visual del jugador local. Requiere datos recientes y el juego en primer plano. Conserva el estado y su icono; no cambia los demás efectos del controlador. Su ruta tiene análisis estático y pruebas simuladas; el usuario informó una prueba satisfactoria en su instalación. **Registro de Blind**, en Juego en vivo, separa los intervalos del efecto de las comprobaciones, detecciones y bloqueos visuales.
+
+**Silenced** es independiente, experimental y empieza desmarcado. Omite únicamente las consultas verificadas de Silenced que detienen el procesamiento local de la habilidad; mantiene el coste de maná, el enfriamiento y los demás filtros normales. Requiere el juego en primer plano y datos recientes del personaje. En una prueba manual con las fuentes de 0.4.4, el usuario confirmó que la habilidad funcionó durante Silenced y el registro mostró omisiones del filtro durante ese episodio. Es un caso comprobado por el usuario; la aceptación remota no se instrumentó. El icono puede permanecer.
+
+**Registro de Silenced** muestra los intervalos del estado y las consultas, detecciones y omisiones del filtro local. Un contador de omisiones no equivale a una habilidad usada o aceptada. Al probarlo, comprueba el efecto práctico de la habilidad; una animación o un cambio de maná no bastan para confirmarlo.
+
+La protección contra **Quiet** todavía no está disponible: no se verificó una ruta que evite su efecto sobre maná y habilidades. Esta versión no ofrece protección AntiQuiet ni recupera MP.
+
+Para recoger una prueba desde el cliente, marca **Activar módulo Debuffs** y **Quiet**. Se guarda y aplica en vivo. Puedes dejar los demás módulos como prefieras, incluido Confuse desmarcado. Esta casilla activa el registro y puede funcionar por sí sola; no activa una protección contra Quiet.
+
+En **Juego en vivo**, **Registro de Quiet** muestra si el efecto se detectó, el MP local y su respaldo, y el último intervalo observado. Conserva una muestra anterior disponible, el inicio, la última durante el efecto y la posterior. Si cambias de mapa, desactivas el registro o se pierden los datos, indica que el intervalo quedó interrumpido. Un dato desconocido o antiguo no se presenta como Quiet desactivado. El respaldo es otro valor local del cliente; no se etiqueta como maná del servidor.
+
+Puedes jugar normalmente con Quiet marcado para registro. Cuando recibas el efecto, comprueba qué ocurre con el maná y si puedes usar una habilidad, y comunica el resultado junto con los logs recientes. La detección por sí sola no demuestra que una habilidad haya sido aceptada ni que Quiet se haya bloqueado.
 
 ## Guardado y cambios en vivo
 
@@ -83,7 +97,7 @@ Windows de 64 bits, instalación del launcher oficial y el perfil exacto de Game
 
 La predicción cubre la ruta de impactos de proyectil investigada; terreno y daño continuo no están cubiertos. Los filtros generales de inmunidad siguen sin bindings completos. Sólo intenta una salida por mapa; si la tecla se bloquea, lo muestra y no reintenta automáticamente. El envío de la tecla no garantiza supervivencia ni confirma por sí solo la llegada al Nexus.
 
-La integración carga temporalmente un agente Frida e instala hooks sin cambiar archivos del juego. Requiere el juego abierto. El usuario informó una salida activa satisfactoria en la instalación de desarrollo. Las pruebas de la interfaz 0.4.0 se realizan sin combate; no establecen compatibilidad con otro equipo.
+La integración carga temporalmente un agente Frida e instala hooks sin cambiar archivos del juego. Requiere el juego abierto. El usuario informó pruebas satisfactorias de los módulos en su instalación. El portable 0.4.4 se extrajo mediante el actualizador en una ruta con espacios: los 1047 archivos del manifiesto coinciden en hash y tamaño, y el ejecutable pasó su comprobación oculta de interfaz, recursos y configuración sin acceder al juego, enviar entradas ni consultar la red. Esta comprobación del paquete no establece compatibilidad con otro equipo o versión del juego.
 
 ## Desarrollo
 

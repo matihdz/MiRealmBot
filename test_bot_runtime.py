@@ -154,6 +154,31 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn("agent.stop", errors[0])
         self.assertIn("script.unload", errors[1])
 
+    def test_failed_final_diagnostic_callback_does_not_fail_resource_cleanup(self):
+        calls = []
+        receipt = {"stopped": True, "debuffs": {"quiet_observation": {"revision": 2}}}
+
+        def stopped():
+            calls.append("agent.stop")
+            return receipt
+
+        def retain(received):
+            self.assertIs(received, receipt)
+            calls.append("retain")
+            raise ValueError("x" * 2000)
+
+        script = SimpleNamespace(exports_sync=SimpleNamespace(stop=stopped),
+                                 unload=lambda: calls.append("script.unload"))
+        session = SimpleNamespace(detach=lambda: calls.append("session.detach"))
+        identity = SimpleNamespace(close=lambda: calls.append("identity.close"))
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            errors = cleanup_runtime(script, session, identity, on_stopped=retain)
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, ["agent.stop", "retain", "script.unload", "session.detach", "identity.close"])
+        self.assertIn("diagnóstico final", output.getvalue())
+        self.assertLess(len(output.getvalue()), 340)
+
     def test_runtime_identity_requires_pid_and_real_module_path(self):
         with tempfile.TemporaryDirectory() as directory:
             expected = Path(directory) / "GameAssembly.dll"

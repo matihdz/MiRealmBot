@@ -17,7 +17,10 @@
   "debuffs": {
     "enabled": false,
     "confuse": true,
-    "quiet": false
+    "blind": false,
+    "silenced": false,
+    "quiet": false,
+    "record_quiet": false
   },
   "excluded_maps": ["Nexus"],
   "gameassembly_sha256": "c4f87cde09d713be23c96a5c17774bdbd65e36cd4a4c6fb017759b24daea01cb"

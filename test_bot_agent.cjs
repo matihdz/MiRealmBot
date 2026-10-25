@@ -8,6 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const main = fs.readFileSync(path.join(__dirname, 'bot_agent.js'), 'utf8');
 const aim = fs.readFileSync(path.join(__dirname, 'autoaim_agent.js'), 'utf8');
+const debuffs = fs.readFileSync(path.join(__dirname, 'debuffs_agent.js'), 'utf8');
 function selectedBody(begin, end) {
     const first = main.indexOf(begin), last = main.indexOf(end, first + begin.length);
     assert.ok(first >= 0 && last > first, 'Production body delimiters must remain explicit.');
@@ -32,13 +33,26 @@ function harness() {
         equals(other) { return this.value === other.value; }
         toInt32() { return this.value | 0; }
         toString() { return String(this.value); }
+        readPointer() { env.targetReads += 1; return new Pointer(env.memory.get(this.value)); }
+        readFloat() { env.targetReads += 1; return env.memory.get(this.value); }
+        readS32() { env.targetReads += 1; return env.memory.get(this.value); }
+        readU8() { env.targetReads += 1; return env.memory.get(this.value); }
+        readU64() { env.targetReads += 1; return { toNumber: () => env.memory.get(this.value) }; }
     }
     const env = { hooks: [], creates: { aim: 0, keys: 0 }, configurations: [], prepared: 0,
         attached: false, attachCount: 0, detachCount: 0, failAttach: false, failDebuffs: false,
-        failDetachId: null, detached: [], emitted: [], now: 1000 };
+        failDetachId: null, detached: [], emitted: [], now: 1000,
+        targetReads: 0, memory: new Map(), failSnapshot: false };
     const ptr = value => new Pointer(value);
     const context = vm.createContext({ env, ptr, rpc: { exports: {} },
         Date: { now: () => env.now },
+        Process: { id: 42, getModuleByName: () => ({ getExportByName: name => name }) },
+        Memory: { alloc: () => ({ value: 0, writeU32(value) { this.value = value; }, readU32() { return this.value; } }) },
+        NativeFunction: function(name) {
+            if (name === 'GetForegroundWindow') return () => ptr(0x9000);
+            if (name === 'GetWindowThreadProcessId') return (window, output) => { output.writeU32(42); return 1; };
+            throw Error('Unexpected native export');
+        },
         Interceptor: { attach(address, callbacks) {
             const id = env.hooks.length;
             const hook = { id, address: address.toInt32(), callbacks, detached: false,
@@ -51,7 +65,7 @@ function harness() {
             return hook;
         } }
     });
-    vm.runInContext(aim + '\n' + main, context);
+    vm.runInContext(aim + '\n' + debuffs + '\n' + main, context);
     vm.runInContext(`
         const api = {
             thread_current: () => ptr(env.attached ? 1 : 0),
@@ -84,7 +98,10 @@ function harness() {
         function assertAttached() { if (!env.attached) throw Error('Metadata owner called without a thread attachment'); }
         createAutoAimBridge = context => { assertAttached(); env.creates.aim += 1; return owner('aim', context.options); };
         createGameBindingsBridge = () => { assertAttached(); env.creates.keys += 1; return owner('keys', {}); };
-        debuffsBridge = { bindings: {}, invalidate() {}, snapshot() { return {}; }, configure(options) {
+        debuffsBridge = { bindings: {}, invalidate() {}, snapshot() {
+            if (env.failSnapshot) throw Error('diagnostic snapshot failed');
+            return {};
+        }, configure(options) {
             assertAttached();
             if (env.failDebuffs || options.quiet) throw Error('Debuffs configuration rejected');
             env.configurations.push({kind: 'debuffs', options: {...options}});
@@ -102,9 +119,36 @@ function harness() {
             startOptions, captureError, bindings });
         globalThis.markScope = () => threadScopes.set(42, { collisions: [], calculations: [], damage_calls: [] });
         globalThis.captureFailure = () => { captureError = 'capture failed'; };
+        globalThis.beginDebuffEpisode = (effect = 'quiet') => {
+            const player = ptr(0x1000), world = ptr(0x2000), worldClass = ptr(32);
+            const effects = effect === 'all' ? ['confuse', 'blind', 'quiet', 'silenced'] :
+                effect === 'three' ? ['confuse', 'blind', 'quiet'] :
+                effect === 'both' ? ['confuse', 'quiet'] : [effect];
+            const word = (effects.includes('confuse') ? 0x400 : 0) |
+                (effects.includes('blind') ? 0x80 : 0) | (effects.includes('quiet') ? 2 : 0);
+            for (const [address, value] of [[0x2048, 0x1000], [0x1564, 0], [0x1744, 0],
+                [0x1740, 0], [0x1250, 0x4000], [0x4018, 3],
+                [0x4020, word], [0x4024, effects.includes('silenced') ? 0x10000 : 0]]) env.memory.set(address, value);
+            activeAssociation = { player, world, identity: 'player-world', map_id: 'map-1',
+                gui_seen_at: env.now, map_name: 'Nexus', hp: 840, max_hp: 840 };
+            debuffsBridge = createDebuffsBridge({ module, playerClass, worldClass, ownedHooks,
+                options: { enabled: true, active: true, confuse: effects.includes('confuse'),
+                    blind: effects.includes('blind'), silenced: effects.includes('silenced'),
+                    quiet: false, record_quiet: effects.includes('quiet') },
+                instanceField: (klass, name, type, offset) => ({ offset }),
+                resolve: () => ptr(33),
+                typedMethod: (klass, name, params, type, isStatic, rva) => ({ native_address: String(0x180000000 + rva) }),
+                verifyBytes: (rva, bytes) => ({ rva, bytes }),
+                validObject: (object, klass) => object.equals(player) && klass.equals(playerClass) ||
+                    object.equals(world) && klass.equals(worldClass),
+                isRunning: () => running, getAssociation: () => activeAssociation });
+            debuffsBridge.install();
+            debuffsBridge.capture(activeAssociation);
+            return debuffsBridge.snapshot();
+        };
     `, context);
     return { env, ptr, rpc: context.rpc.exports, inspect: context.inspect, markScope: context.markScope,
-        captureFailure: context.captureFailure };
+        captureFailure: context.captureFailure, beginDebuffEpisode: context.beginDebuffEpisode };
 }
 
 test('Live configuration retains sequence, event IDs, queued events and lifecycle epoch', () => {
@@ -235,5 +279,109 @@ test('The public configure RPC rejects stopped and failed captures', () => {
     failed.captureFailure();
     assert.throws(() => failed.rpc.configure(defaults()), /not ready/);
     assert.equal(failed.env.attachCount, 0);
+});
+test('Stop receipts preserve the production Quiet owner interruption after hook cleanup without further target reads', () => {
+    const trial = harness(), options = defaults();
+    options.autoaim.enabled = true;
+    trial.rpc.configure(options);
+    assert.equal(trial.beginDebuffEpisode().quiet_observation.last_episode.state, 'active');
+    const reads = trial.env.targetReads;
+    const receipt = trial.rpc.stop();
+    assert.equal(receipt.stopped, true);
+    assert.equal(receipt.hooks_detached, 1);
+    assert.equal(trial.inspect().hooks, 0);
+    assert.equal(trial.env.detached.length, 1);
+    assert.equal(trial.env.targetReads, reads);
+    assert.equal(receipt.debuffs.quiet_observation.last_episode.state, 'interrupted');
+    assert.equal(receipt.debuffs.quiet_observation.last_episode.end_reason, 'stopped');
+    assert.equal(receipt.debuffs.quiet_observation.last_episode.after, null);
+    assert.equal(receipt.debuffs.quiet_observation.current, null);
+    assert.equal(receipt.debuffs.quiet_observation.revision, 2);
+    assert.equal(trial.rpc.poll(), null);
+});
+test('Fallible stop diagnostics cannot prevent resource cleanup or turn it into a resource failure', () => {
+    const trial = harness(), options = defaults();
+    options.autoaim.enabled = true;
+    trial.rpc.configure(options);
+    trial.env.failSnapshot = true;
+    const receipt = trial.rpc.stop();
+    assert.equal(receipt.stopped, true);
+    assert.equal(receipt.hooks_detached, 1);
+    assert.match(receipt.diagnostics_error, /diagnostic snapshot failed/);
+    assert.equal(trial.inspect().hooks, 0);
+    assert.equal(trial.env.detached.length, 1);
+});
+test('Stop receipts preserve both production condition owners after releasing the single Confuse hook', () => {
+    const trial = harness(), options = defaults();
+    options.autoaim.enabled = true;
+    trial.rpc.configure(options);
+    const initial = trial.beginDebuffEpisode('both');
+    assert.equal(initial.confuse_observation.last_episode.state, 'active');
+    assert.equal(initial.quiet_observation.last_episode.state, 'active');
+    assert.equal(initial.confuse_observation.current.movement_blocks, 0);
+    assert.equal(trial.inspect().hooks, 2); // One simulated aim hook and one production Confuse hook.
+    const reads = trial.env.targetReads;
+    const receipt = trial.rpc.stop();
+    assert.equal(receipt.hooks_detached, 2);
+    assert.equal(trial.inspect().hooks, 0);
+    assert.equal(trial.env.targetReads, reads);
+    for (const effect of ['quiet', 'confuse']) {
+        const observation = receipt.debuffs[effect + '_observation'];
+        assert.equal(observation.current, null);
+        assert.equal(observation.last_episode.state, 'interrupted');
+        assert.equal(observation.last_episode.end_reason, 'stopped');
+        assert.equal(observation.last_episode.after, null);
+        assert.equal(observation.revision, 2);
+    }
+});
+test('Stop receipts retain all three condition interruptions after releasing both visual getters and movement', () => {
+    const trial = harness(), options = defaults();
+    options.autoaim.enabled = true;
+    trial.rpc.configure(options);
+    const initial = trial.beginDebuffEpisode('three');
+    for (const effect of ['quiet', 'confuse', 'blind']) {
+        assert.equal(initial[effect + '_observation'].last_episode.state, 'active', effect);
+    }
+    assert.equal(initial.blind_observation.current.visual_blocks, 0);
+    assert.equal(trial.inspect().hooks, 4); // Aim, Confuse, and two Blind getters.
+    const reads = trial.env.targetReads;
+    const receipt = trial.rpc.stop();
+    assert.equal(receipt.hooks_detached, 4);
+    assert.equal(trial.inspect().hooks, 0);
+    assert.equal(trial.env.targetReads, reads);
+    for (const effect of ['quiet', 'confuse', 'blind']) {
+        const observation = receipt.debuffs[effect + '_observation'];
+        assert.equal(observation.current, null, effect);
+        assert.equal(observation.last_episode.state, 'interrupted', effect);
+        assert.equal(observation.last_episode.end_reason, 'stopped', effect);
+        assert.equal(observation.last_episode.after, null, effect);
+        assert.equal(observation.revision, 2, effect);
+    }
+});
+test('Stop receipts preserve four condition intervals after releasing the experimental local ability gate', () => {
+    const trial = harness(), options = defaults();
+    options.autoaim.enabled = true;
+    trial.rpc.configure(options);
+    const initial = trial.beginDebuffEpisode('all');
+    for (const effect of ['quiet', 'confuse', 'blind', 'silenced']) {
+        assert.equal(initial[effect + '_observation'].last_episode.state, 'active', effect);
+    }
+    assert.equal(initial.silenced_observation.current.condition_word1, 0x10000);
+    assert.equal(initial.silenced_observation.current.ability_gate_bypasses, 0);
+    assert.equal(initial.server_acceptance_verified, false);
+    assert.equal(trial.inspect().hooks, 5); // Aim, Confuse, two Blind getters, Silenced.
+    const reads = trial.env.targetReads;
+    const receipt = trial.rpc.stop();
+    assert.equal(receipt.hooks_detached, 5);
+    assert.equal(trial.inspect().hooks, 0);
+    assert.equal(trial.env.targetReads, reads);
+    for (const effect of ['quiet', 'confuse', 'blind', 'silenced']) {
+        const observation = receipt.debuffs[effect + '_observation'];
+        assert.equal(observation.current, null, effect);
+        assert.equal(observation.last_episode.state, 'interrupted', effect);
+        assert.equal(observation.last_episode.end_reason, 'stopped', effect);
+        assert.equal(observation.last_episode.after, null, effect);
+        assert.equal(observation.revision, 2, effect);
+    }
 });
 console.log(checks + ' production configuration checks passed (simulated native and child boundaries).');

@@ -1,10 +1,12 @@
 """Offline update-panel checks: no GitHub calls, replacement or game access."""
+import gc
 from types import SimpleNamespace
 import threading
 import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
+import weakref
 
 from client_updates import UpdatePanel
 import update_core
@@ -61,9 +63,22 @@ class UpdatePanelTests(unittest.TestCase):
             return
         for event in self.release_events:
             event.set()
+        self.destroy_panel()
+        self.root.destroy()
+        self.root = None
+        gc.collect()
+
+    def destroy_panel(self):
+        if self.panel is None:
+            return
         self.panel.close()
         self.pump_until(lambda: not self.panel.busy)
-        self.root.destroy()
+        self.panel.destroy()
+        self.panel = None
+        # Tk widgets keep Python cycles through child attributes and masters.
+        # Retire this test-owned graph on Tcl's thread before a later worker
+        # allocation can run cyclic GC and finalize its StringVars there.
+        gc.collect()
 
     def pump_until(self, condition, timeout=2):
         deadline = time.monotonic() + timeout
@@ -96,7 +111,7 @@ class UpdatePanelTests(unittest.TestCase):
         self.assertEqual(self.links, [self.service.release.html_url])
 
     def test_startup_check_is_deferred_and_never_runs_on_the_tk_thread(self):
-        self.panel.destroy()
+        self.destroy_panel()
         with patch("client_updates.time.monotonic", return_value=10):
             self.panel = UpdatePanel(self.root, service=self.service, portable=True,
                 current_version="1.0.0", can_install=lambda: self.allowed,
@@ -111,6 +126,18 @@ class UpdatePanelTests(unittest.TestCase):
         self.assertNotEqual(self.service.worker_ids[0], threading.get_ident())
         self.panel.tick()
         self.assertEqual(len(self.service.calls), 1)
+
+    def test_replaced_panel_and_its_variables_are_released_on_the_tk_thread(self):
+        finalized_on = []
+        panel = weakref.ref(self.panel)
+        variables = [weakref.ref(getattr(self.panel, name)) for name in (
+            "status_var", "release_var", "progress_var", "install_hint_var")]
+        for reference in variables:
+            weakref.finalize(reference(), lambda: finalized_on.append(threading.get_ident()))
+        self.destroy_panel()
+        self.assertIsNone(panel())
+        self.assertTrue(all(reference() is None for reference in variables))
+        self.assertEqual(finalized_on, [threading.get_ident()] * 4)
 
     def test_check_displays_release_notes_and_github_link_without_downloading(self):
         self.checked()
