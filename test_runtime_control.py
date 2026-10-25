@@ -243,6 +243,54 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(self.run_worker(), 1)
         self.assertEqual(self.calls[-4:], ["agent.stop", "script.unload", "session.detach", "identity.close"])
 
+    def test_log_open_failure_warns_once_and_still_delivers_active_protection(self):
+        with mock.patch("live_autonexus.BoundedRuntimeLog", side_effect=OSError("folder read only")):
+            self.assertEqual(self.run_worker(active=True), 0)
+        self.assertIn("key.request", self.calls)
+        warnings = [event for event in self.updates if event["event"] == "logging_warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIs(warnings[0]["logging_enabled"], False)
+        self.assertEqual(warnings[0]["reason"], "logging_disabled")
+        self.assertEqual(self.updates[-1]["status"], "finished")
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+
+    def test_log_write_failure_disables_only_logging_and_does_not_skip_cleanup(self):
+        logger = mock.Mock(path=self.root / "analysis" / "live-autonexus.jsonl",
+                           legacy_files_retained=0)
+        logger.record.side_effect = OSError("disk full")
+        with mock.patch("live_autonexus.BoundedRuntimeLog", return_value=logger):
+            self.assertEqual(self.run_worker(active=True), 0)
+        self.assertIn("key.request", self.calls)
+        self.assertEqual(logger.record.call_count, 1)
+        logger.close.assert_called_once()
+        warnings = [event for event in self.updates if event["event"] == "logging_warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("disk full", warnings[0]["error"])
+        self.assertEqual(self.calls[-4:], ["agent.stop", "script.unload", "session.detach", "identity.close"])
+
+    def test_log_close_failure_does_not_turn_successful_cleanup_into_session_failure(self):
+        logger = mock.Mock(path=self.root / "analysis" / "live-autonexus.jsonl",
+                           legacy_files_retained=0)
+        logger.close.side_effect = OSError("close failed")
+        with mock.patch("live_autonexus.BoundedRuntimeLog", return_value=logger):
+            self.assertEqual(self.run_worker(), 0)
+        warnings = [event for event in self.updates if event["event"] == "logging_warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIs(self.updates[-1]["cleanup_complete"], True)
+        self.assertEqual(self.updates[-1]["code"], 0)
+
+    def test_legacy_cleanup_pending_is_visible_and_logging_remains_enabled(self):
+        logger = mock.Mock(path=self.root / "analysis" / "live-autonexus.jsonl",
+                           legacy_files_retained=2)
+        with mock.patch("live_autonexus.BoundedRuntimeLog", return_value=logger):
+            self.assertEqual(self.run_worker(), 0)
+        warnings = [event for event in self.updates if event["event"] == "logging_warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["reason"], "legacy_cleanup_pending")
+        self.assertIs(warnings[0]["logging_enabled"], True)
+        self.assertEqual(warnings[0]["retained_files"], 2)
+        self.assertGreater(logger.record.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

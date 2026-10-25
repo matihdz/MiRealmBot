@@ -26,12 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCES = (
     "app_paths.py", "autonexus_core.py", "autonexus_controller.py",
     "damage_prediction.py", "windows_nexus.py", "probe_game.py",
-    "live_autonexus.py", "replay_autonexus.py", "client_ui.py",
+    "live_autonexus.py", "client_ui.py", "runtime_logs.py",
     "app_version.py", "update_core.py", "client_updates.py",
     "autoaim_settings.py", "game_settings.py",
 )
 RESOURCE_FILES = (
-    "autonexus_agent.js", "examples/demo-combat.jsonl", "examples/README.md",
+    "autonexus_agent.js",
     "updater_worker.ps1",
     "game_bindings_agent.js", "autoaim_agent.js",
 )
@@ -55,6 +55,7 @@ REQUIRED_PAYLOAD = (
 FORBIDDEN_NAMES = {
     "gameassembly.dll", "librb.dll", "realmbot_exalted.exe",
     "global-metadata.dat", "rotmg exalt.exe", "autonexus.example.json",
+    "replay_autonexus.py", "demo-combat.jsonl",
 }
 
 
@@ -142,11 +143,11 @@ def validate_distribution(app: Path) -> None:
         relative = path.relative_to(app)
         if path.name.lower() in FORBIDDEN_NAMES:
             unexpected.append(relative.as_posix())
-        if any(part.lower() in ("analysis", ".venv", ".git", "__pycache__") for part in relative.parts):
+        if any(part.lower() in ("analysis", ".venv", ".git", "__pycache__", "examples") for part in relative.parts):
             unexpected.append(relative.as_posix())
         if path.suffix.lower() == ".bak":
             unexpected.append(relative.as_posix())
-        if path.suffix.lower() == ".jsonl" and relative.as_posix() != "_internal/examples/demo-combat.jsonl":
+        if path.suffix.lower() == ".jsonl":
             unexpected.append(relative.as_posix())
     if unexpected:
         raise RuntimeError(f"Archivos que no deben publicarse: {sorted(set(unexpected))}")

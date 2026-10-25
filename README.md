@@ -1,6 +1,6 @@
 # MiRealmBot
 
-Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. La versión **0.2.0** añade las pestañas **AutoAim** y **Actualizaciones**. Lee la vida del jugador, reconoce una ruta de impactos de proyectil y permite comparar parámetros con una demostración sintética.
+Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. La versión **0.3.0** organiza las configuraciones por módulo y conserva sólo un historial reciente de la sesión.
 
 **[Descargar MiRealmBot para Windows](https://github.com/matihdz/MiRealmBot/releases/latest)** · [Guía paso a paso](docs/USO.md)
 
@@ -9,53 +9,65 @@ Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. La ve
 1. En la última Release, abre **Assets** y descarga **MiRealmBot-Windows-x64.zip**.
 2. Pulsa **Extraer todo** y abre **MiRealmBot.exe** dentro de la carpeta extraída.
 3. Abre el juego mediante su launcher oficial y deja el personaje en Nexus.
-4. En **AutoAim**, deja marcada **Leer teclas del juego** y revisa la tecla Nexus detectada. Si no se reconoce, elige la misma tecla manualmente en el panel izquierdo.
-5. En **Juego en vivo**, comprueba primero la lectura con **Observar → Iniciar observación**; luego pulsa **Detener**.
-6. Ajusta tus parámetros, selecciona **Activo** y pulsa **Iniciar AutoNexus activo**.
-7. Vuelve a la ventana del juego y mantenla en primer plano.
+4. En **AutoNexus**, configura el porcentaje de vida, la predicción y la detección de la tecla Nexus. Pulsa **Guardar configuración**.
+5. Si quieres apuntado automático, configura **AutoAim** y guarda.
+6. En **Juego en vivo**, comprueba primero la lectura con **Observar → Iniciar observación**; luego pulsa **Detener**.
+7. Selecciona **Activo → Iniciar bot** y vuelve a la ventana del juego. Mantenla en primer plano.
 
-El ZIP incluye Python, Frida y Tkinter. Conserva la carpeta `_internal` junto al ejecutable. **Source code (zip)** es para desarrollo; el archivo preparado para usar es **MiRealmBot-Windows-x64.zip**.
+El ZIP incluye Python, Frida y Tkinter. Conserva la carpeta `_internal` junto al ejecutable. **Source code (zip)** contiene el código para desarrollo; el archivo preparado para usar es **MiRealmBot-Windows-x64.zip**.
 
-Abrir el programa no inicia la protección. **Observar** y **Reproducir registro** no envían teclas ni modifican la puntería. **Detener** cierra la sesión y retira los hooks. Las opciones quedan bloqueadas mientras una sesión está funcionando.
+Abrir el programa no inicia la protección. **Observar** recoge lecturas sin enviar teclas ni modificar la puntería. **Detener** cierra la sesión y retira los hooks. Para cambiar ajustes durante una sesión, detén el bot, guarda los cambios e inicia de nuevo.
 
-## Parámetros y simulación
+## Las cuatro pestañas
 
-- Umbral de vida configurable; la descarga comienza en **90 %** para las primeras pruebas.
-- Predicción de daño de proyectiles activada en la configuración de ejemplo.
-- Lectura de las teclas resueltas del juego, incluidos valores predeterminados. En modo automático Nexus espera una lectura reconocida; desmarca **Leer teclas del juego** para elegir manualmente Control izquierdo (`CTRL`), Control derecho o una letra.
-- Reproducción y modo en vivo tienen borradores separados.
-- Guardado con copia de seguridad. Configuración y registros quedan junto al ejecutable.
+| Pestaña | Contenido |
+| --- | --- |
+| **Juego en vivo** | Modo Observar/Activo, inicio y detención del bot, vida, mapa, decisiones y actividad reciente. |
+| **AutoNexus** | Porcentaje de salida, predicción de daño y tecla de regreso al Nexus. |
+| **AutoAim** | Activación, Close to Mouse, Extrapolation, radio, prioridad de bosses y filtro de murallas. |
+| **Actualizaciones** | Buscar, descargar e instalar nuevas versiones desde GitHub. |
 
-La demostración incluida es **sintética**, con dos golpes de 65: al configurar 30 % solicita salida en el segundo; con 40 %, en el primero. Sólo recalcula decisiones, sin conectarse al juego ni demostrar supervivencia. Puedes cargar tus propios registros JSONL desde la interfaz.
+La barra lateral y la pestaña de reproducción de registros se retiraron. Las pestañas de configuración sólo guardan ajustes; iniciar el bot se hace desde **Juego en vivo**.
+
+## AutoNexus
+
+La configuración inicial usa **90 %** y predicción de impactos de proyectil activada. El umbral solicita salir cuando la vida observada o prevista queda estrictamente por debajo del límite.
+
+**Leer teclas del juego** usa la tecla Nexus resuelta dentro del juego, incluidos sus valores predeterminados. En modo automático espera una lectura reconocida antes de actuar. Si no se reconoce, detén la sesión, desmarca la opción y selecciona manualmente la misma tecla del juego: Control izquierdo (`CTRL`), Control derecho o una letra.
 
 ## AutoAim
 
-En **AutoAim**, marca **Activar AutoAim** y usa el modo **Activo** de la sesión en vivo. El único modo de selección es **Close to Mouse**: elige un enemigo cercano al cursor dentro del radio configurado. Empieza desactivado; sólo actúa cuando el autofire del juego está encendido y el juego no está en pausa. Activa autofire con la tecla que tengas configurada en el juego; no necesitas mantener una tecla adicional pulsada.
+Empieza desactivado. Marca **Activar AutoAim**, guarda y usa el modo **Activo** de Juego en vivo. **Close to Mouse** elige un enemigo cercano al cursor dentro del radio configurado. Sólo actúa con el autofire del juego encendido y el juego sin pausa; usa la tecla de autofire que tengas configurada en el juego.
 
-**Extrapolation** empieza en **302**. Con 0 apunta a la posición actual; valores mayores adelantan más según el movimiento del enemigo. Es un coeficiente de la fórmula investigada, cuya unidad temporal no está confirmada. **Radio junto al cursor** empieza en **4 unidades del mundo del juego**.
+**Extrapolation** empieza en **302**. Con 0 apunta a la posición actual; valores mayores adelantan según el movimiento del enemigo. La unidad temporal de este coeficiente no está confirmada. **Radio junto al cursor** empieza en **4 unidades del mundo del juego**.
 
-Desde **0.2.1**, **Priorizar bosses** elige primero un boss reconocido dentro del radio del cursor. Entre varios bosses elige el más cercano al cursor; sin uno, mantiene la selección normal. Se basa en el marcador de boss del juego: un jefe sin ese marcador conserva el tratamiento normal.
+- **Priorizar bosses**: prefiere un boss reconocido dentro del radio. Entre varios bosses elige el más cercano al cursor; sin uno, mantiene la selección normal. La clasificación depende del marcador de boss del juego.
+- **Ignorar murallas**: excluye las clases de muralla del juego como objetivos, incluidas las destructibles. Los proyectiles conservan sus colisiones habituales.
 
-**Ignorar murallas** excluye las clases de muralla del juego como objetivos, incluidas las destructibles. Ambas opciones son independientes y empiezan desmarcadas. Detén la sesión, marca las que quieras, guarda e inicia de nuevo.
+Ambas opciones son independientes y empiezan desmarcadas. El puente ajusta el punto de puntería de la ruta investigada de proyectiles. No mueve el cursor ni activa autofire o ataques por sí mismo. El usuario confirmó el apuntado activo en el perfil actual; la precisión y el funcionamiento en otro equipo siguen pendientes de medición.
 
-El puente ajusta el punto de puntería utilizado por la ruta investigada de disparos de proyectil. No mueve el cursor, activa autofire ni inicia ataques por sí mismo. La prueba activa del perfil actual registró selección de enemigos y ajustes de puntería, y el usuario confirmó que apunta correctamente. Quedan por medir la precisión y el funcionamiento en otro equipo.
+## Registros recientes
+
+El historial de sesiones reutiliza **tres archivos de hasta 1 MiB** en `analysis`: el actual y dos anteriores, con un máximo combinado de **3 MiB**. Al llenarse, se elimina el contenido más antiguo. La interfaz también conserva sólo actividad reciente.
+
+Al iniciar una sesión se retiran los archivos del formato antiguo de logs del bot; si alguno está ocupado o no puede borrarse, se conserva y se informa para intentarlo en un próximo inicio. Otros archivos de análisis y respaldos no forman parte de esta limpieza ni de la cuota. Un fallo al escribir el registro muestra un aviso y permite continuar el bot.
 
 ## Actualizar
 
-Al abrir la versión 0.2.0 se consulta GitHub para buscar una versión nueva. En **Actualizaciones** puedes pulsar **Buscar actualizaciones**, **Descargar actualización** y **Instalar y reiniciar**. Primero detén la sesión y espera a que termine su limpieza. Se conservan configuración, registros y copias de seguridad, y la carpeta anterior queda como respaldo junto a la nueva.
+En **Actualizaciones**, pulsa **Buscar actualizaciones**, **Descargar actualización** e **Instalar y reiniciar**. Primero detén la sesión y espera su limpieza. Se conserva la configuración y la carpeta anterior queda como respaldo junto a la nueva. Los respaldos pueden conservar registros de versiones anteriores.
 
-La versión **0.1.0** necesita una descarga manual de 0.2.0 para incorporar este actualizador. Al ejecutar desde código fuente, la pestaña permite consultar novedades y abrir **Ver descarga en GitHub**; la instalación desde la interfaz corresponde al paquete portable.
+Las versiones desde **0.2.0** incluyen el actualizador y consultan GitHub al abrir. Si usas **0.1.0**, descarga la versión actual manualmente una vez. Desde código fuente puedes consultar novedades y abrir la descarga; la instalación desde la interfaz corresponde al paquete portable.
 
 ## Compatibilidad y alcance
 
 Windows de 64 bits, instalación del launcher oficial y el perfil exacto de GameAssembly indicado en `autonexus.example.json`. Steam y ubicaciones personalizadas no están admitidas. Si el juego se actualiza, la conexión se bloquea hasta verificar y publicar un perfil compatible.
 
-La predicción implementada cubre la ruta de impactos de proyectil investigada. No cubre terreno ni daño continuo. Los filtros generales de inmunidad siguen sin bindings completos. Sólo intenta una salida por mapa; si la tecla se bloquea, lo muestra y no reintenta automáticamente. El envío de una tecla no garantiza supervivencia ni confirma por sí solo la llegada al Nexus.
+La predicción cubre la ruta de impactos de proyectil investigada; terreno y daño continuo no están cubiertos. Los filtros generales de inmunidad siguen sin bindings completos. Sólo intenta una salida por mapa; si la tecla se bloquea, lo muestra y no reintenta automáticamente. El envío de la tecla no garantiza supervivencia ni confirma por sí solo la llegada al Nexus.
 
-La integración carga temporalmente un agente Frida e instala hooks; no cambia los archivos del juego. Requiere que el juego ya esté abierto. El usuario de la instalación de desarrollo informó una salida activa satisfactoria; no se ha probado todavía en el equipo de otra persona.
+La integración carga temporalmente un agente Frida e instala hooks sin cambiar archivos del juego. Requiere el juego abierto. El usuario informó una salida activa satisfactoria en la instalación de desarrollo. Las pruebas de interfaz y registros de 0.3.0 se realizan sin combate; no establecen compatibilidad con otro equipo.
 
 ## Desarrollo
 
 [Cómo ejecutar, probar y generar el ZIP](docs/DESARROLLO.md).
 
-El repositorio contiene el código propio y una demostración sintética. No incluye archivos del juego, el bot original, capturas personales ni herramientas de ingeniería inversa. El paquete portable incluye los avisos y textos de licencias de sus dependencias.
+El repositorio contiene el código propio y herramientas de reproducción para desarrollo. No incluye archivos del juego, el bot original, capturas personales ni herramientas de ingeniería inversa. El portable incluye los avisos y licencias de sus dependencias.

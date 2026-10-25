@@ -21,7 +21,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "unittest", "pip", "setuptools"],
+    excludes=["pytest", "unittest", "pip", "setuptools", "replay_autonexus"],
     noarchive=False,
     optimize=0,
 )

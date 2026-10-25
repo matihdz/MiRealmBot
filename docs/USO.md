@@ -7,74 +7,93 @@
 3. Haz clic derecho sobre el ZIP y elige **Extraer todo**. Guarda la carpeta, por ejemplo, en el Escritorio.
 4. Entra a la carpeta extraída **MiRealmBot** y abre **MiRealmBot.exe**.
 
-Conserva toda la carpeta, incluido `_internal`. El ejecutable lleva Python, Frida y Tkinter; no necesitas instalarlos. La descarga **Source code (zip)** contiene el código para desarrollo y no es el programa preparado para usar. La versión **0.2.0** incluye **AutoAim** y **Actualizaciones**.
-
-## Conectarlo al juego
+Conserva toda la carpeta, incluido `_internal`. El ejecutable lleva Python, Frida y Tkinter; no necesitas instalarlos. **Source code (zip)** contiene el código para desarrollo.
 
 Requiere Windows de 64 bits y RotMG Exalt instalado mediante el launcher oficial. El perfil corresponde a una versión concreta de `GameAssembly.dll`. Steam y ubicaciones personalizadas no están admitidas.
 
-1. Abre RotMG Exalt y deja al personaje en **Nexus**.
-2. En los controles del juego, revisa la tecla para volver al Nexus.
-3. En MiRealmBot abre **AutoAim** y deja marcada **Leer teclas del juego**. Puedes pulsar **Volver a leer teclas** para previsualizar lo guardado. Al iniciar la sesión se leen las teclas resueltas dentro del juego, incluidos sus valores predeterminados. Nexus espera esa lectura antes de actuar. Si la detección no se reconoce, detén la sesión, desmarca **Leer teclas del juego** y elige manualmente **la misma tecla** del juego. `CTRL` es Control izquierdo; también se admiten Control derecho y letras.
-4. Abre **Juego en vivo**, selecciona **Observar** y pulsa **Iniciar observación**. Deben aparecer tu vida y el mapa. Este modo no envía teclas.
-5. Pulsa **Detener** y espera a que la sesión quede cerrada.
-6. Ajusta el porcentaje. El valor inicial es **90 %** para una prueba que solicite salir pronto, y la predicción de proyectiles está marcada. Puedes guardar tus parámetros con **Guardar parámetros**.
-7. Selecciona **Activo** y pulsa **Iniciar AutoNexus activo**. El indicador debe mostrar **ACTIVO · PUEDE ENVIAR** la tecla elegida.
-8. Vuelve a la ventana del juego y mantenla en primer plano mientras juegas.
+## Configurar AutoNexus
 
-Abrir MiRealmBot no inicia el bot. Al volver a abrir el programa tendrás que iniciar la sesión desde la interfaz. **Detener** retira la integración; para modificar parámetros durante una sesión, detén, cambia e inicia de nuevo.
+Con la sesión detenida, abre **AutoNexus**:
 
-## Usar AutoAim
+1. Ajusta el porcentaje de vida. El valor inicial es **90 %** para solicitar salir pronto durante las primeras pruebas.
+2. Deja marcada la predicción si quieres considerar los impactos de proyectil detectados.
+3. Deja marcada **Leer teclas del juego** para usar tu tecla Nexus efectiva, incluidos valores predeterminados. Se confirma dentro del juego al iniciar la sesión.
+4. Si no se reconoce la tecla, detén la sesión, desmarca esa opción y selecciona manualmente **la misma tecla** del juego. `CTRL` es Control izquierdo; también se admiten Control derecho y letras.
+5. Pulsa **Guardar configuración**.
 
-1. Con la sesión detenida, abre **AutoAim** y marca **Activar AutoAim**.
+Guardar no inicia el bot. La predicción reconoce la ruta de impactos de proyectil implementada; terreno y daño continuo no están cubiertos. El umbral solicita salir estrictamente por debajo del límite calculado.
+
+## Configurar AutoAim
+
+En **AutoAim**, con la sesión detenida:
+
+1. Marca **Activar AutoAim** si quieres usarlo.
 2. Deja inicialmente **Extrapolation: 302** y **Radio junto al cursor: 4**.
-3. Selecciona **Activo** en el panel izquierdo y pulsa **Iniciar sesión activa**. Es la misma sesión que usa AutoNexus.
-4. Vuelve al juego, activa su autofire con tu tecla configurada y acerca el cursor al enemigo que quieres seleccionar.
-5. Para dejar de apuntar automáticamente, apaga el autofire del juego. **Detener** en MiRealmBot cierra toda la sesión.
+3. Activa **Priorizar bosses** para preferir un boss reconocido dentro del radio. Entre varios bosses elige el más cercano al cursor; sin boss, usa la selección normal. Un jefe sin el marcador de boss del juego se trata como un enemigo normal.
+4. Activa **Ignorar murallas** para excluir murallas, incluidas las destructibles, como objetivos. Los proyectiles conservan sus colisiones habituales.
+5. Pulsa **Guardar configuración**.
 
-El modo disponible es **Close to Mouse**: selecciona el enemigo más cercano al cursor dentro del radio indicado, medido en unidades del mundo del juego. AutoAim empieza desactivado. Requiere modo Activo, autofire encendido y juego sin pausa; no hay que mantener una tecla adicional pulsada. En **Observar** calcula sin alterar los disparos.
+El modo disponible es **Close to Mouse**. Selecciona al enemigo más cercano al cursor dentro del radio, medido en unidades del mundo del juego. AutoAim y ambos filtros empiezan desactivados.
 
-**Extrapolation** controla cuánto se adelanta la puntería según el movimiento del enemigo: 0 usa su posición actual y un valor mayor adelanta más. La unidad temporal de este coeficiente no está confirmada. Los cambios se aplican al volver a iniciar la sesión; **Guardar parámetros** los conserva para la próxima vez.
+**Extrapolation** controla el adelanto según el movimiento del enemigo: 0 usa su posición actual y un valor mayor adelanta más. La unidad temporal del coeficiente no está confirmada.
 
-En **0.2.1** puedes activar dos opciones independientes, desmarcadas por defecto:
+La pestaña muestra la tecla de autofire detectada como información. AutoAim usa el estado de autofire del juego: enciéndelo con tu tecla configurada; no hay que mantener una tecla adicional pulsada. Requiere modo Activo y juego sin pausa.
 
-- **Priorizar bosses**: si hay un boss reconocido y otros enemigos dentro del radio, elige al boss. Entre varios bosses elige el más cercano al cursor. Sin boss, mantiene el enemigo más cercano. Reconoce el marcador de boss de los datos del juego; un jefe sin ese marcador se trata como un enemigo normal.
-- **Ignorar murallas**: excluye las murallas, incluidas las destructibles, como objetivos del AutoAim. Los proyectiles conservan sus colisiones habituales.
+El puente modifica el punto de puntería de la ruta investigada de proyectiles. No mueve el cursor ni enciende autofire o ataques. El usuario confirmó el apuntado activo en el perfil actual; la precisión y la compatibilidad con otro equipo siguen pendientes de medición.
 
-Para cambiarlas: **Detener → marcar las opciones → Guardar parámetros → Iniciar sesión activa**.
+## Iniciar y detener el bot
 
-El puente modifica el punto de puntería de la ruta de proyectiles investigada. No mueve el cursor ni enciende autofire ni dispara por sí mismo. La prueba activa del perfil actual registró selección de enemigos y ajustes de puntería; el usuario confirmó que apunta correctamente. La precisión y la compatibilidad con otro equipo siguen pendientes de medición.
+Todos los controles de sesión están en **Juego en vivo**:
 
-## Actualizar desde el programa
+1. Abre RotMG Exalt y deja al personaje en **Nexus**.
+2. Selecciona **Observar → Iniciar observación**. Deben aparecer tu vida y el mapa. Este modo recoge lecturas sin enviar teclas ni modificar la puntería.
+3. Pulsa **Detener** y espera a que finalice la limpieza.
+4. Selecciona **Activo → Iniciar bot** para usar los módulos configurados.
+5. Vuelve a la ventana del juego y mantenla en primer plano. Para AutoAim, enciende el autofire del juego y acerca el cursor al objetivo.
+6. Usa **Detener** en MiRealmBot para cerrar toda la sesión y retirar la integración.
 
-La versión 0.2.0 busca novedades en GitHub al abrirse. Puedes volver a comprobarlas en **Actualizaciones**:
+Abrir el programa no inicia la protección. Las configuraciones y el modo quedan bloqueados mientras la sesión funciona. Para cambiarlos: **Detener → configurar → Guardar configuración → volver a Juego en vivo → iniciar**. El inicio valida y usa los ajustes actuales; **Guardar configuración** los conserva para la próxima vez que abras el programa.
 
-1. Pulsa **Buscar actualizaciones**.
-2. Si hay una versión nueva, pulsa **Descargar actualización** y espera a que termine.
-3. Si tienes una sesión en vivo abierta, pulsa **Detener** y espera a que finalice su limpieza.
-4. Pulsa **Instalar y reiniciar**. MiRealmBot se cerrará y abrirá la versión nueva.
-
-Se conservan `autonexus.json`, los registros de `analysis` y sus copias de seguridad. La carpeta anterior completa queda junto a la instalación, con un nombre como `MiRealmBot.backup-…`. Después del reinicio debes iniciar la sesión en vivo de nuevo.
-
-Si tienes **0.1.0**, descarga y extrae **0.2.0** manualmente siguiendo los primeros pasos de esta guía; 0.1.0 aún no incluye el actualizador. Con ambos programas cerrados puedes copiar tu `autonexus.json` y la carpeta `analysis` a la carpeta nueva. Desde 0.2.0 podrás usar **Actualizaciones** para las entregas siguientes.
-
-Si ejecutas el código fuente, usa **Ver descarga en GitHub** para abrir la descarga manual. La instalación desde esta pestaña requiere el paquete portable.
+En 0.3.0 se retiraron la pestaña de reproducción de registros y la barra lateral. AutoNexus y AutoAim contienen sus ajustes; la actividad y el control del bot están en Juego en vivo.
 
 ## Leer el estado
 
-- **Sólo observación**: recoge lecturas y decisiones sin enviar la tecla.
+- **Sólo observación**: recoge lecturas y decisiones sin actuar.
 - **Tecla enviada**: Windows aceptó el envío; comprueba dentro del juego que llegaste al Nexus.
 - **Tecla bloqueada**: el juego no tenía el foco o no estaba disponible. No se reintenta automáticamente en el mismo mapa; detén y vuelve a iniciar cuando puedas mantener el foco del juego.
-- **El perfil no coincide**: el juego cambió. Hace falta una versión de MiRealmBot cuyo perfil se haya verificado para esa actualización; no cambies el hash manualmente.
+- **El perfil no coincide**: el juego cambió. Hace falta una versión cuyo perfil se haya verificado para esa actualización; no cambies el hash manualmente.
+- **Registro en disco desactivado**: falló la escritura del historial. El bot continúa; revisa el aviso de la sesión.
 
-La predicción reconoce la ruta de impactos de proyectil implementada. Terreno y daño continuo no están cubiertos. El umbral dispara estrictamente por debajo del límite calculado. El programa no garantiza supervivencia frente a todos los golpes.
+El programa no garantiza supervivencia frente a todos los golpes.
 
-## Probar parámetros sin jugar
+## Registros y espacio usado
 
-La primera pestaña contiene una **demostración sintética** de dos golpes de 65. Puedes cambiar porcentaje y predicción, reproducir los eventos y comparar siete umbrales. La simulación no se conecta al juego ni envía teclas.
+El historial reciente está junto al ejecutable, dentro de `analysis`:
 
-**Usar en vivo →** copia el borrador al panel del juego; no lo inicia ni lo guarda automáticamente.
+- `live-autonexus.jsonl`: archivo actual, hasta **1 MiB**.
+- `live-autonexus.1.jsonl` y `live-autonexus.2.jsonl`: dos archivos anteriores, hasta **1 MiB** cada uno.
+
+Se reutilizan entre sesiones y se elimina lo más antiguo al llenarse. El máximo combinado es **3 MiB**. Las entradas individuales tienen un límite de 64 KiB; si una lo supera se guarda un aviso de omisión. La actividad visible también conserva sólo mensajes recientes.
+
+Los logs con el formato antiguo del bot se limpian al iniciar una sesión. Si un archivo está ocupado o no se puede borrar, se informa y se vuelve a intentar en otro inicio. La limpieza no afecta otros archivos de análisis ni respaldos; esos archivos quedan fuera de la cuota.
+
+Si necesitas comunicar un problema, comparte pronto el mensaje de error y los registros recientes: el historial va sobrescribiendo lo más antiguo.
+
+## Actualizar desde el programa
+
+Desde 0.2.0 se buscan novedades en GitHub al abrir. En **Actualizaciones**:
+
+1. Pulsa **Buscar actualizaciones**.
+2. Si hay una versión nueva, pulsa **Descargar actualización** y espera.
+3. Pulsa **Detener** en Juego en vivo y espera su limpieza.
+4. Pulsa **Instalar y reiniciar**. MiRealmBot se cerrará y abrirá la versión nueva, con la sesión detenida.
+
+Se conservan `autonexus.json`, los registros de `analysis` y sus copias. La carpeta anterior completa queda junto a la instalación, con un nombre como `MiRealmBot.backup-…`. Esos respaldos pueden conservar logs antiguos y no forman parte del límite de 3 MiB del historial activo.
+
+Si usas **0.1.0**, descarga y extrae la versión actual manualmente una vez. Con ambos programas cerrados puedes copiar tu `autonexus.json` y la carpeta `analysis` a la carpeta nueva. Después podrás usar el actualizador.
+
+Desde código fuente, **Ver descarga en GitHub** abre la descarga manual. La instalación desde esta pestaña requiere el paquete portable.
 
 ## Si algo falla
 
-Envía a quien te pasó el programa una captura del mensaje de error y el número de versión descargada. Los registros se guardan en `analysis`, junto al ejecutable. La configuración está en `autonexus.json`; las copias de seguridad terminan en `.bak`. Puedes conservar esos archivos al cambiar de versión.
+Envía a quien te pasó el programa una captura del mensaje de error y el número de versión. La configuración está en `autonexus.json`; las copias terminan en `.bak`. Conserva esos archivos al cambiar de versión.

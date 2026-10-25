@@ -37,7 +37,8 @@ class PortableBoundaryTests(unittest.TestCase):
 
     def test_capture_and_game_binary_are_rejected(self):
         for relative in ("analysis/private.jsonl", "_internal/GameAssembly.dll",
-                         "backup.json.bak", "capture.jsonl", ".venv/private.txt"):
+                         "backup.json.bak", "capture.jsonl", ".venv/private.txt",
+                         "_internal/examples/demo-combat.jsonl", "_internal/replay_autonexus.py"):
             with self.subTest(relative=relative):
                 target = self.app / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,8 @@ class PortableBoundaryTests(unittest.TestCase):
                 target.unlink()
                 # An empty private directory is also forbidden.
                 if target.parent.name in ("analysis", ".venv"):
+                    target.parent.rmdir()
+                if target.parent.name == "examples":
                     target.parent.rmdir()
 
     def test_missing_release_assets_are_rejected(self):

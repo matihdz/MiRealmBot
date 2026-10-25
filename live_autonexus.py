@@ -26,6 +26,7 @@ from autonexus_core import Action, AutoNexus, Decision
 from damage_prediction import AcceptedHitPrediction, finite_age
 from game_settings import unity_key_name
 from probe_game import EXPECTED_EXE, ProcessIdentity
+from runtime_logs import BoundedRuntimeLog
 from windows_nexus import (NexusInputBlocked, NexusInputError, WindowsNexus,
                            Win32InputBackend, normalize_nexus_key)
 
@@ -322,6 +323,8 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
     callback = on_update
     callback_error = None
     script_load_attempted = False
+    session_id = uuid4().hex
+    logging_failed = False
 
     def check_stop() -> None:
         if callback_error is not None:
@@ -329,15 +332,8 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         if stop_event is not None and stop_event.is_set():
             raise _RuntimeCancelled()
 
-    def record(event: str, **fields: Any) -> None:
+    def notify(entry: dict[str, Any]) -> None:
         nonlocal callback, callback_error
-        entry = {"captured_at_utc": datetime.now(timezone.utc).isoformat(),
-                 "event": event, "pid": selected_pid,
-                 "log_path": None if log_path is None else str(log_path), **fields}
-        if log is not None:
-            json.dump(entry, log, ensure_ascii=False)
-            log.write("\n")
-            log.flush()
         if callback is not None:
             try:
                 callback(entry)
@@ -347,21 +343,35 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                 callback_error = str(error)
                 print(f"La interfaz dejó de recibir actualizaciones: {error}", file=sys.stderr)
 
-    def final_record(event: str, **fields: Any) -> None:
-        nonlocal log, code
+    def entry_for(event: str, **fields: Any) -> dict[str, Any]:
+        return {"captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "event": event, "pid": selected_pid, "session_id": session_id,
+                "log_path": None if log_path is None else str(log_path), **fields}
+
+    def disable_logging(error: Exception) -> None:
+        nonlocal log, logging_failed
+        failed_log, log = log, None
+        if failed_log is not None:
+            try:
+                failed_log.close()
+            except Exception:
+                pass
+        if not logging_failed:
+            logging_failed = True
+            message = f"No se pudo guardar el registro; la sesión continúa: {error}"
+            print(message, file=sys.stderr)
+            notify(entry_for("logging_warning", reason="logging_disabled",
+                             logging_enabled=False, error=message))
+
+    def record(event: str, **fields: Any) -> None:
+        entry = entry_for(event, **fields)
         try:
-            record(event, **fields)
+            if log is not None:
+                log.record(entry)
         except Exception as error:
-            # Disk failure must not prevent cleanup or its terminal UI event.
-            code = code or 1
-            failed_log, log = log, None
-            if failed_log is not None:
-                try:
-                    failed_log.close()
-                except Exception:
-                    pass
-            print(f"No se pudo escribir el registro: {error}", file=sys.stderr)
-            record(event, **fields)
+            # Disk failure cannot stop protection, input, or terminal delivery.
+            disable_logging(error)
+        notify(entry)
 
     try:
         record("lifecycle", status="connecting", active=active)
@@ -409,10 +419,19 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         sources = [(path, path.read_bytes()) for path in source_files]
         source = "\n".join(content.decode("utf-8") for _, content in sources)
         analysis = ROOT / "analysis"
-        analysis.mkdir(exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        log_path = analysis / f"live-autonexus-{stamp}-pid{pid}-{uuid4().hex}.jsonl"
-        log = log_path.open("x", encoding="utf-8")
+        log_path = analysis / "live-autonexus.jsonl"
+        try:
+            log = BoundedRuntimeLog(analysis)
+            log_path = log.path
+            if log.legacy_files_retained:
+                message = (f"Quedan {log.legacy_files_retained} registros anteriores ocupados "
+                           "o sin permiso de borrado; se reintentará al iniciar otra sesión.")
+                print(message, file=sys.stderr)
+                record("logging_warning", reason="legacy_cleanup_pending",
+                       logging_enabled=True, retained_files=log.legacy_files_retained,
+                       error=message)
+        except Exception as error:
+            disable_logging(error)
         check_stop()
         identity.assert_alive()
         session = device.attach(pid)
@@ -526,21 +545,21 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
             else:
                 stop_event.wait(POLL_SECONDS)
     except _RuntimeCancelled:
-        final_record("stop_requested")
+        record("stop_requested")
     except KeyboardInterrupt:
         code = 130
         print("AutoNexus interrumpido; descargando la integración.")
-        final_record("interrupted")
+        record("interrupted")
     except Exception as error:
         code = 1
         print(f"AutoNexus detenido: {error}", file=sys.stderr)
-        final_record("error", error_type=type(error).__name__, error=str(error))
+        record("error", error_type=type(error).__name__, error=str(error))
     finally:
-        final_record("lifecycle", status="stopping", active=active)
+        record("lifecycle", status="stopping", active=active)
         # A created but never loaded script cannot install hooks. Detaching its
         # session releases it without calling unavailable agent RPC exports.
         errors = cleanup_runtime(script if script_load_attempted else None, session, identity)
-        final_record("cleanup", complete=not errors, errors=errors)
+        record("cleanup", complete=not errors, errors=errors)
         for error in errors:
             print(f"Error de limpieza: {error}", file=sys.stderr)
         if errors and code == 0:
@@ -549,8 +568,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
             try:
                 log.close()
             except Exception as error:
-                code = code or 1
-                errors.append(f"log.close: {error}")
+                disable_logging(error)
             log = None
         record("lifecycle", status="finished", active=active,
                cleanup_complete=not errors, errors=errors, code=code)

@@ -1,53 +1,68 @@
-MiRealmBot 0.2.1 - Inicio rápido
+MiRealmBot 0.3.0 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
 3. Abre RotMG Exalt con el launcher oficial y deja el personaje en Nexus.
-4. En MiRealmBot abre "AutoAim" y deja marcada "Leer teclas del juego".
-5. La tecla Nexus se confirma dentro del juego al iniciar la sesión.
-   Si la detección falla, detén la sesión, desmarca "Leer teclas del juego"
-   y elige la MISMA tecla manualmente. CTRL = Control izquierdo.
-   Después abre "Juego en vivo".
-6. Para comprobar las lecturas, selecciona "Observar" e "Iniciar observación".
-7. Cuando veas tu vida y mapa, pulsa "Detener".
-8. Ajusta el porcentaje y la predicción. Para empezar a probar, el paquete trae 90 %.
-9. Selecciona "Activo" y pulsa "Iniciar AutoNexus activo".
-10. Vuelve a la ventana del juego y mantenla en primer plano mientras juegas.
+4. En AutoNexus ajusta porcentaje y predicción. El paquete comienza en 90 %.
+5. Deja marcada "Leer teclas del juego" para detectar la tecla Nexus.
+   Se confirma dentro del juego al iniciar la sesión. Si no se reconoce,
+   detén la sesión, desmarca esa opción y elige la MISMA tecla manualmente.
+   CTRL = Control izquierdo. Pulsa "Guardar configuración".
+6. Si quieres usar AutoAim, configúralo en su pestaña y guarda.
+7. En "Juego en vivo", elige "Observar" e "Iniciar observación".
+8. Cuando veas tu vida y mapa, pulsa "Detener" y espera el cierre.
+9. Elige "Activo" y pulsa "Iniciar bot" en Juego en vivo.
+10. Vuelve al juego y mantenlo en primer plano.
 
-IMPORTANTE PARA USARLO
-- Abrir el programa no inicia la protección. Debes pulsar Iniciar en modo Activo.
-- "Observar" y la reproducción del registro no envían teclas.
-- Conserva la carpeta _internal junto al ejecutable.
-- No necesitas instalar Python, Frida, Ghidra ni REA.
-- Primera entrega: Windows de 64 bits e instalación del launcher oficial.
-- Si cambió la versión del juego y el perfil no coincide, necesitas una actualización.
-- La predicción implementada cubre proyectiles; no cubre todos los daños del juego.
-- Pulsa Detener para cerrar la sesión o cambiar parámetros.
+LAS PESTAÑAS
+- Juego en vivo: iniciar/detener, modo y estado del bot.
+- AutoNexus: porcentaje, predicción y tecla Nexus.
+- AutoAim: sus opciones de apuntado y tecla de autofire detectada.
+- Actualizaciones: buscar, descargar e instalar versiones nuevas.
+- Guardar configuración no inicia el bot. Para cambiar ajustes durante
+  una sesión, detén, cambia, guarda y vuelve a iniciar en Juego en vivo.
+- Se retiraron la reproducción de registros y la barra lateral.
 
 AUTOAIM OPCIONAL
-- Priorizar bosses: elige primero al boss marcado por el juego dentro del radio.
-  Entre varios bosses elige el más cercano; sin boss, mantiene la selección normal.
-- Ignorar murallas: excluye las murallas como objetivos del AutoAim.
-- Son opciones independientes y empiezan desmarcadas.
-- Con la sesión detenida, abre AutoAim y marca "Activar AutoAim".
-- El modo Close to Mouse elige un enemigo cercano al cursor.
+- Marca "Activar AutoAim" con la sesión detenida y guarda.
+- Close to Mouse elige un enemigo cercano al cursor.
 - Para empezar, deja Extrapolation en 302 y Radio junto al cursor en 4.
-- Selecciona Activo y pulsa "Iniciar sesión activa".
-- Vuelve al juego y enciende su autofire con tu tecla configurada.
-- No necesitas mantener una tecla adicional. Sólo actúa con autofire encendido
-  y el juego sin pausa. No mueve el cursor ni activa ataques por sí mismo.
-- Extrapolation 0 apunta a la posición actual; valores mayores adelantan más.
-- La prueba de AutoAim en combate sigue pendiente para este perfil.
+- Priorizar bosses: prefiere al boss marcado por el juego dentro del radio.
+  Entre varios bosses elige el más cercano; sin boss, selección normal.
+- Ignorar murallas: excluye las murallas como objetivos del AutoAim.
+- Ambos filtros son independientes y empiezan desmarcados.
+- Inicia el bot en modo Activo desde Juego en vivo. Vuelve al juego,
+  enciende autofire con tu tecla configurada y acerca el cursor al objetivo.
+- No necesitas mantener otra tecla pulsada. Actúa con autofire encendido
+  y el juego sin pausa. No mueve el cursor ni inicia ataques por sí mismo.
+- Extrapolation 0 usa la posición actual; valores mayores adelantan más.
+
+REGISTROS RECIENTES
+- Los logs del bot se reutilizan: tres archivos de hasta 1 MiB cada uno,
+  máximo 3 MiB de historial activo en analysis. Se borra lo más antiguo.
+- Al iniciar una sesión se retiran los logs del formato anterior del bot.
+  Los archivos ocupados se conservan hasta poder limpiarlos.
+- Otros análisis y los respaldos de versiones quedan fuera de esta cuota.
+- Si falla la escritura del registro se avisa y el bot sigue funcionando.
 
 ACTUALIZAR
-- La versión 0.2.0 busca novedades en GitHub al abrirse.
 - Abre Actualizaciones y pulsa "Buscar actualizaciones".
 - Si hay una versión nueva, pulsa "Descargar actualización".
 - Detén la sesión, espera su limpieza y pulsa "Instalar y reiniciar".
-- Conserva tus parámetros, registros y copias; deja toda la carpeta anterior
-  como respaldo junto a la instalación.
-- Si aún usas 0.1.0, descarga y extrae 0.2.0 manualmente una vez.
-  Después podrás actualizar desde el programa.
+- Conserva tus parámetros y deja la carpeta anterior como respaldo.
+  Los respaldos pueden conservar registros antiguos.
+- Si usas 0.1.0, descarga y extrae la versión actual manualmente una vez.
+
+PARA TENER EN CUENTA
+- Abrir el programa no inicia la protección.
+- Observar recoge lecturas sin enviar teclas ni cambiar la puntería.
+- Conserva _internal junto al ejecutable. No necesitas instalar Python,
+  Frida, Ghidra ni REA.
+- Windows de 64 bits e instalación del launcher oficial.
+- Si el perfil no coincide tras una actualización del juego, necesitas
+  una versión compatible de MiRealmBot.
+- La predicción cubre la ruta investigada de proyectiles; no todo el daño
+  del juego. Enviar la tecla no garantiza supervivencia.
 
 Guía completa: docs/USO.md
 Última versión: https://github.com/matihdz/MiRealmBot/releases/latest

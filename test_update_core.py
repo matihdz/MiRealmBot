@@ -145,17 +145,26 @@ class ArchiveTests(unittest.TestCase):
 
 
 class PreparationTests(unittest.TestCase):
+    # These tests simulate an installation and its next release. Neither side
+    # depends on the version of the checkout running this test suite.
+    INSTALLED_VERSION = "1.0.0"
+    RELEASE_VERSION = "1.1.0"
+
+    def setUp(self):
+        self.enterContext(patch.object(updates, "VERSION", self.INSTALLED_VERSION))
+
     def make_bundle(self):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
             files = {"MiRealmBot.exe": b"synthetic exe", "_internal/python312.dll": b"dll",
                      "_internal/autonexus_agent.js": b"agent", "autonexus.json": b"{}",
-                     "BUILD-MANIFEST.json": b'{"application":"MiRealmBot","version":"0.3.0"}'}
+                     "BUILD-MANIFEST.json": json.dumps({"application": "MiRealmBot",
+                                                        "version": self.RELEASE_VERSION}).encode()}
             for name, content in files.items():
                 archive.writestr("MiRealmBot/" + name, content)
         data = stream.getvalue()
         checksum = (hashlib.sha256(data).hexdigest() + "  " + updates.ZIP_NAME + "\n").encode()
-        payload = release_payload(archive=data)
+        payload = release_payload(self.RELEASE_VERSION, archive=data)
         payload["assets"][1]["size"] = len(checksum)
         return data, checksum, updates.parse_release(payload)
 

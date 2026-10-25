@@ -36,7 +36,7 @@ def check_release_assets(app_root: Path, resource_root: Path, version: str) -> d
 
 
 def portable_self_test() -> int:
-    """Exercise bundled imports/assets and replay without touching the game."""
+    """Exercise bundled imports, settings and hidden UI without game access."""
     from app_paths import APP_ROOT, RESOURCE_ROOT, resource_path
     report = {
         "frozen": bool(getattr(sys, "frozen", False)),
@@ -53,9 +53,10 @@ def portable_self_test() -> int:
         import autoaim_settings
         import game_settings
         import client_updates
+        import runtime_logs
         import update_core
         from live_autonexus import load_config
-        from replay_autonexus import load_recording, compare_thresholds
+        import client_ui
 
         report["version"] = VERSION
         report.update(check_release_assets(APP_ROOT, RESOURCE_ROOT, VERSION))
@@ -63,33 +64,64 @@ def portable_self_test() -> int:
         agent = resource_path("autonexus_agent.js")
         if not agent.is_file() or agent.stat().st_size == 0:
             raise RuntimeError("Falta el agente incluido")
-        recording = load_recording()
-        compared = compare_thresholds(recording, (30, 40))
-        labels = [row["event_label"] for row in compared]
-        if labels != ["Golpe 2", "Golpe 1"]:
-            raise RuntimeError(f"La demostración no produjo el resultado esperado: {labels}")
+        if "replay_autonexus" in sys.modules:
+            raise RuntimeError("La aplicación portátil no debe cargar el reproductor de registros")
+        if client_ui.VERSION != VERSION or client_updates.VERSION != VERSION or update_core.VERSION != VERSION:
+            raise RuntimeError("La interfaz y las actualizaciones tienen versiones distintas")
+        # Supply parsed values instead of inspecting the user's game registry.
+        bindings = game_settings.parse_game_bindings({})
+        runtime_called = False
+
+        def block_runtime(*args, **kwargs):
+            nonlocal runtime_called
+            runtime_called = True
+            raise RuntimeError("El self-test no puede iniciar la integración del juego")
+
         root = tk.Tk()
+        app = None
         try:
             root.withdraw()
+            app = client_ui.App(root, config_path=APP_ROOT / "autonexus.json",
+                                runtime_runner=block_runtime,
+                                settings_reader=lambda: bindings,
+                                auto_check_updates=False)
             root.update_idletasks()
             tcl_version = str(root.tk.call("info", "patchlevel"))
             tk_version = str(root.tk.call("package", "require", "Tk"))
+            tabs = [app.notebook.tab(tab, "text") for tab in app.notebook.tabs()]
+            if tabs != ["Juego en vivo", "AutoNexus", "AutoAim", "Actualizaciones"]:
+                raise RuntimeError(f"Las pestañas no corresponden a esta versión: {tabs}")
+            app.draft.validate()
+            if root.state() != "withdrawn":
+                raise RuntimeError("La comprobación de interfaz debe permanecer oculta")
+            if runtime_called or app.runtime_thread is not None or app.updates_panel.busy:
+                raise RuntimeError("Abrir la interfaz no debe iniciar el juego ni buscar actualizaciones")
+            ui_title = root.title()
         finally:
-            root.destroy()
-        # Importing the window must not start its worker or attach to a process.
-        import client_ui  # noqa: F401
-        if client_ui.VERSION != VERSION or client_updates.VERSION != VERSION or update_core.VERSION != VERSION:
-            raise RuntimeError("La interfaz y las actualizaciones tienen versiones distintas")
+            if app is not None:
+                app.close()
+            else:
+                root.destroy()
         default_aim = autoaim_settings.parse_autoaim()
         if default_aim.enabled or default_aim.prioritize_bosses or default_aim.ignore_walls:
             raise RuntimeError("AutoAim y sus opciones no deben activarse por defecto")
-        # Parse an empty supplied mapping; do not inspect the local registry.
-        bindings = game_settings.parse_game_bindings({})
         report.update({
             "ok": True,
             "ui_version": client_ui.VERSION,
             "update_version": update_core.VERSION,
-            "new_modules_imported": ["autoaim_settings", "game_settings", "client_updates", "update_core"],
+            "modules_imported": ["autoaim_settings", "game_settings", "client_updates", "update_core", "runtime_logs"],
+            "ui_tabs": tabs,
+            "ui_title": ui_title,
+            "ui_checked_while_hidden": True,
+            "ui_starts_stopped": True,
+            "ui_configuration_validated": True,
+            "replay_module_loaded": False,
+            "default_runtime_log_limits": {
+                "max_file_bytes": runtime_logs.MAX_FILE_BYTES,
+                "backup_count": runtime_logs.BACKUP_COUNT,
+                "max_record_bytes": runtime_logs.MAX_RECORD_BYTES,
+                "total_bytes": runtime_logs.TOTAL_LOG_BYTES,
+            },
             "default_autoaim_enabled": default_aim.enabled,
             "default_prioritize_bosses": default_aim.prioritize_bosses,
             "default_ignore_walls": default_aim.ignore_walls,
@@ -103,7 +135,6 @@ def portable_self_test() -> int:
             "configuration_beside_executable": APP_ROOT == Path(sys.executable).resolve().parent,
             "threshold": config.threshold,
             "prediction_enabled": config.prediction_enabled,
-            "demo_trigger_labels": labels,
         })
         code = 0
     except Exception as error:
