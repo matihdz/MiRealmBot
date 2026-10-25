@@ -4,7 +4,8 @@
 // This is an auxiliary runtime observer, not REA Evidence. Names below are
 // current IL2CPP metadata aliases, not original source/PDB symbols.
 // Only owned Interceptor.attach hooks are installed. No managed method is
-// invoked, no target field is written, and no input/Nexus action is performed.
+// invoked. Optional active AutoAim changes the caller-owned camera result for
+// the verified autofire callsite; observation leaves its bytes unchanged.
 
 let running = false;
 let ownedHooks = [];
@@ -25,6 +26,9 @@ const MAX_EVENTS = 256;
 const MAX_SCOPE_THREADS = 128;
 const MAX_SCOPE_DEPTH = 64;
 let diagnostics = {};
+let gameBindingsBridge = null;
+let autoaimBridge = null;
+let startOptions = null;
 
 function clearScopes() {
     scopeGeneration += 1;
@@ -54,6 +58,8 @@ function invalidateLifecycle() {
     lastIdentity = null;
     activeAssociation = null;
     clearScopes();
+    if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
+    if (autoaimBridge !== null) autoaimBridge.invalidate();
 }
 
 function stop() {
@@ -62,18 +68,26 @@ function stop() {
     activeAssociation = null;
     events = [];
     clearScopes();
+    if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
+    if (autoaimBridge !== null) autoaimBridge.invalidate();
     return { stopped: true, hooks_detached: detachOwnedHooks() };
 }
 
 function start(options = {}) {
     if (options === null || typeof options !== 'object' || Array.isArray(options) ||
-        Object.keys(options).some(key => key !== 'prediction_enabled') ||
-        ('prediction_enabled' in options && typeof options.prediction_enabled !== 'boolean')) {
-        throw new Error('start options must contain only a boolean prediction_enabled.');
+        Object.keys(options).some(key => !['prediction_enabled', 'detect_game_keys', 'autoaim'].includes(key)) ||
+        ('prediction_enabled' in options && typeof options.prediction_enabled !== 'boolean') ||
+        ('detect_game_keys' in options && typeof options.detect_game_keys !== 'boolean')) {
+        throw new Error('Invalid bridge options.');
+    }
+    const requestedAim = options.autoaim || { enabled: false, active: false };
+    if (typeof requestedAim !== 'object' || Array.isArray(requestedAim) ||
+        typeof requestedAim.enabled !== 'boolean' || typeof requestedAim.active !== 'boolean') {
+        throw new Error('AutoAim requires explicit enabled and active booleans.');
     }
     const requestedPrediction = options.prediction_enabled === true;
     if (running) {
-        if (requestedPrediction !== predictionEnabled) throw new Error('Stop the bridge before changing prediction mode.');
+        if (JSON.stringify(options) !== startOptions) throw new Error('Stop the bridge before changing options.');
         return startReceipt;
     }
     if (ownedHooks.length !== 0) throw new Error('A preceding hook cleanup remains incomplete.');
@@ -234,6 +248,7 @@ function start(options = {}) {
             limitation: 'Nexus to Vault and Vault to Nexus transitions were observed. Other lifecycle paths have not been exhaustively verified.'
         },
         restrictions: { managed_invocations: false, target_field_writes: false,
+            autofire_camera_result_write: requestedAim.enabled && requestedAim.active,
             input: false, nexus_action: false, global_detach: false }
     };
     bindings.prediction = { enabled: requestedPrediction, source: requestedPrediction ?
@@ -316,6 +331,13 @@ function start(options = {}) {
             ];
             bindings.tracked_health_source = 'Host consumes ordered final projectile damage and authoritative HP synchronization observations.';
         }
+        const bridgeContext = { module, api, resolve, instanceField, typedMethod, verifyBytes,
+            validObject, ownedHooks, playerClass, worldClass, options: requestedAim,
+            isRunning: () => running, getAssociation: () => activeAssociation };
+        gameBindingsBridge = options.detect_game_keys === true ? createGameBindingsBridge(bridgeContext) : null;
+        if (gameBindingsBridge !== null) bindings.game_keys = gameBindingsBridge.bindings;
+        autoaimBridge = requestedAim.enabled ? createAutoAimBridge(bridgeContext) : null;
+        if (autoaimBridge !== null) bindings.autoaim = autoaimBridge.bindings;
     } finally {
         if (!ownThread.isNull()) {
             api.thread_detach(ownThread);
@@ -356,15 +378,25 @@ function start(options = {}) {
     }
     function capture(gui, now) {
         const observed = readGui(gui);
-        if (observed === null) { latest = null; activeAssociation = null; clearScopes(); return; }
+        if (observed === null) {
+            latest = null; activeAssociation = null; clearScopes();
+            if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
+            if (autoaimBridge !== null) autoaimBridge.invalidate();
+            return;
+        }
         let mapId = null;
         if (observed.identity !== null) {
-            if (lastIdentity !== null && observed.identity !== lastIdentity) { epoch += 1; clearScopes(); }
+            if (lastIdentity !== null && observed.identity !== lastIdentity) {
+                epoch += 1; clearScopes();
+                if (gameBindingsBridge !== null) gameBindingsBridge.invalidate();
+                if (autoaimBridge !== null) autoaimBridge.invalidate();
+            }
             lastIdentity = observed.identity;
             mapId = JSON.stringify([epoch, observed.world.toString(), observed.player.toString(), observed.name]);
         }
         activeAssociation = mapId === null ? null : { gui, player: observed.player, world: observed.world,
             identity: observed.identity, map_id: mapId, gui_seen_at: now };
+        if (autoaimBridge !== null && autoaimBridge.capture) autoaimBridge.capture(activeAssociation);
         publish(healthFrame(observed, mapId), now);
     }
     function readEventFrame(now, expectedPlayer = null) {
@@ -568,6 +600,8 @@ function start(options = {}) {
             }
         }));
         if (requestedPrediction) installPredictionHooks();
+        if (gameBindingsBridge !== null) gameBindingsBridge.install();
+        if (autoaimBridge !== null) autoaimBridge.install();
         latest = null;
         lastIdentity = null;
         activeAssociation = null;
@@ -581,6 +615,7 @@ function start(options = {}) {
         diagnostics = { collision_calls: 0, local_calculations: 0, matched_damage_entries: 0,
             final_damage_events: 0, health_sync_events: 0, zero_damage_hits: 0, queue_overflows: 0 };
         predictionEnabled = requestedPrediction;
+        startOptions = JSON.stringify(options);
         startReceipt = { pid: Process.id, module_path: module.path, bindings };
         running = true;
         return startReceipt;
@@ -610,6 +645,8 @@ rpc.exports = {
         events = [];
         return Object.assign({}, latest.frame, { age_ms: now - latest.captured_at,
             events: drained, events_lost: eventsLost,
+            game_bindings: gameBindingsBridge === null ? {} : gameBindingsBridge.snapshot(),
+            autoaim: autoaimBridge === null ? { enabled: false, active: false, status: 'disabled' } : autoaimBridge.snapshot(),
             diagnostics: Object.assign({}, diagnostics, { active_scope_threads: threadScopes.size }) });
     },
     stop

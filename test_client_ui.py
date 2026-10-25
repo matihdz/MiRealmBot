@@ -8,8 +8,10 @@ import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from client_ui import App, RuntimeInbox
+from game_settings import GameBinding
 from live_autonexus import SUPPORTED_GAMEASSEMBLY_SHA256
 
 
@@ -59,11 +61,20 @@ class ClientTests(unittest.TestCase):
         self.calls = []
         self.release_cleanup = threading.Event()
         self.cleanup_started = threading.Event()
+        self.settings_calls = 0
+        self.bindings = {
+            "nexus": GameBinding("nexus", "CTRL", 306, "fixture"),
+            "autofire": GameBinding("autofire", None, None, None, "Sin valor guardado")}
+        def settings_reader():
+            self.settings_calls += 1
+            return self.bindings
 
         def runtime(config, *, active, stop_event, on_update):
             self.calls.append((config, active))
             on_update({"event": "lifecycle", "status": "running"})
             on_update({"event": "telemetry", "frame": frame, "game_foreground": False,
+                       "nexus_binding_status": "detected",
+                       "game_bindings": {"nexus": {"unity_code": 306, "age_ms": 0}},
                        "prediction": {"enabled": config.prediction_enabled, "tracked_hp": 100}})
             stop_event.wait(3)
             self.cleanup_started.set()
@@ -72,7 +83,7 @@ class ClientTests(unittest.TestCase):
             return 0
 
         self.app = App(self.root, config_path=self.config_path, recording_path=self.recording_path,
-                       runtime_runner=runtime)
+                       runtime_runner=runtime, settings_reader=settings_reader)
         self.root.update()
 
     def tearDown(self):
@@ -181,6 +192,199 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.app.status_var.get(), "Error")
         self.assertIn("detach", self.app.live_vars["error"].get())
         self.assertFalse(self.app.start_live())
+
+    def select_aim(self):
+        self.app.notebook.select(self.app.aim_tab)
+        self.root.update()
+
+    def test_autoaim_defaults_and_tab_drafts_are_independent_of_updates_and_replay(self):
+        self.assertFalse(self.app.aim_enabled_var.get())
+        self.assertEqual(self.app.extrapolation_var.get(), "302")
+        self.assertEqual(self.app.aim_radius_var.get(), "4")
+        self.assertEqual(self.settings_calls, 1)
+        self.assertIn("se leerá dentro del juego", self.app.bindings_var.get())
+        self.app.threshold_var.set("40")
+        self.select_aim()
+        self.assertEqual(self.app.active_context, "live")
+        self.app.threshold_var.set("70")
+        self.app.extrapolation_var.set("120")
+        self.app.notebook.select(self.app.updates_panel)
+        self.root.update()
+        self.assertEqual(self.app.live_draft["threshold_percent"], 70)
+        self.assertEqual(self.app.replay_draft["threshold_percent"], 40)
+        self.assertFalse(self.app.start_live())
+        self.app.notebook.select(self.app.replay_tab)
+        self.root.update()
+        self.assertEqual(self.app.threshold_var.get(), "40")
+        self.select_aim()
+        self.assertEqual(self.app.threshold_var.get(), "70")
+        self.assertEqual(self.app.extrapolation_var.get(), "120")
+        self.assertEqual(self.calls, [])
+
+    def test_invalid_autoaim_numbers_never_start_a_session(self):
+        self.select_aim()
+        self.app.extrapolation_var.set("nan")
+        with patch("client_ui.messagebox.showerror"):
+            self.assertFalse(self.app.start_live())
+        self.app.extrapolation_var.set("302")
+        self.app.aim_radius_var.set("0")
+        with patch("client_ui.messagebox.showerror"):
+            self.assertFalse(self.app.start_live())
+        self.assertEqual(self.calls, [])
+
+    def test_saving_autoaim_retains_unknown_config_and_uses_the_owned_parser(self):
+        self.select_aim()
+        self.app.aim_enabled_var.set(True)
+        self.app.extrapolation_var.set("12,5")
+        self.app.aim_radius_var.set("3")
+        self.app.save_parameters()
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["autoaim"], {"enabled": True, "mode": "close_to_mouse",
+            "activation": "autofire", "extrapolation": 12.5, "mouse_radius": 3.0})
+        self.assertTrue(saved["detect_game_keys"])
+        self.assertEqual(saved["extra_user_setting"], "preservar")
+        self.assertEqual(self.calls, [])
+
+    def test_start_from_autoaim_rereads_nexus_and_keeps_observe_authority(self):
+        self.select_aim()
+        self.bindings["nexus"] = GameBinding("nexus", "R", 114, "fixture")
+        self.bindings["autofire"] = GameBinding("autofire", "I", 105, "fixture")
+        self.app.aim_enabled_var.set(True)
+        self.app.extrapolation_var.set("150")
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: len(self.calls) == 1)
+        config, active = self.calls[0]
+        self.assertEqual(config.nexus_key, "R")
+        self.assertTrue(config.autoaim.enabled)
+        self.assertEqual(config.autoaim.activation, "autofire")
+        self.assertEqual(config.autoaim.extrapolation, 150)
+        self.assertFalse(active)
+        self.assertIn("Autofire: I", self.app.bindings_var.get())
+        self.assertEqual(str(self.app.extrapolation_input.cget("state")), "disabled")
+
+    def test_unknown_saved_key_waits_for_game_and_manual_mode_does_not_read(self):
+        self.select_aim()
+        self.app.key_var.set("W")
+        self.bindings["nexus"] = GameBinding("nexus", None, None, None, "Ausente")
+        self.app.refresh_game_bindings()
+        self.assertIn("se leerá dentro del juego", self.app.bindings_var.get())
+        self.assertNotIn("manual", self.app.bindings_var.get())
+        self.assertEqual(str(self.app.key_combo.cget("state")), "disabled")
+        self.app.detect_keys_var.set(False)
+        self.app.refresh_game_bindings()
+        self.assertIn("tecla manual", self.app.bindings_var.get())
+        self.assertEqual(str(self.app.key_combo.cget("state")), "readonly")
+        reads = self.settings_calls
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: len(self.calls) == 1)
+        config, _ = self.calls[0]
+        self.assertFalse(config.detect_game_keys)
+        self.assertEqual(config.nexus_key, "W")
+        self.assertEqual(self.settings_calls, reads)
+
+    def test_registry_failure_still_promises_internal_read_instead_of_manual_fallback(self):
+        self.select_aim()
+        def fail():
+            raise OSError("Fixture sin registro")
+        self.app.settings_reader = fail
+        self.app.refresh_game_bindings()
+        self.assertIn("Se comprobarán dentro del juego", self.app.bindings_var.get())
+        self.assertNotIn("manual", self.app.bindings_var.get())
+        self.assertTrue(self.app.detect_keys_var.get())
+
+    def test_waiting_and_unsupported_nexus_bindings_have_specific_live_status(self):
+        self.select_live()
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: len(self.calls) == 1)
+        record = {"event": "telemetry", "nexus_binding_status": "waiting",
+                  "decision": {"action": "none", "reason": "AutoNexus is disabled"}}
+        self.app._handle_runtime_record(record)
+        self.assertEqual(self.app.live_vars["decision"].get(), "Esperando tecla Nexus del juego")
+        self.assertIn("pendiente de lectura", self.app.live_vars["applied"].get())
+        record["nexus_binding_status"] = "unsupported"
+        self.app._handle_runtime_record(record)
+        self.assertIn("no admitida", self.app.live_vars["decision"].get())
+        self.assertIn("Detén la sesión", self.app.live_hint_var.get())
+        record["nexus_binding_status"] = "detected"
+        record["game_bindings"] = {"nexus": {"unity_code": 306, "age_ms": 2}}
+        record["decision"] = {"action": "none", "reason": "health is below the limit"}
+        self.app._handle_runtime_record(record)
+        self.assertEqual(self.app.live_vars["decision"].get(), "Vida bajo el límite")
+        self.assertIn("· CTRL ·", self.app.live_vars["applied"].get())
+
+    def test_autoaim_telemetry_preserves_unknown_autofire_and_observe_mode(self):
+        self.app._handle_runtime_record({"event": "telemetry", "autoaim": {
+            "enabled": True, "active": False, "autofire": None, "target_id": 0,
+            "angle": 1.2}})
+        self.assertIn("sin confirmar", self.app.aim_status_var.get())
+        self.assertIn("Observación", self.app.aim_status_var.get())
+        self.assertIn("enemigo 0", self.app.aim_status_var.get())
+        self.app._handle_runtime_record({"event": "telemetry", "autoaim": {
+            "enabled": True, "active": True, "autofire": True, "paused": True}})
+        self.assertIn("Pausado", self.app.aim_status_var.get())
+        self.assertIn("encendido", self.app.aim_status_var.get())
+
+    def test_runtime_bindings_only_change_applied_key_when_fresh_and_detection_enabled(self):
+        self.select_live()
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: len(self.calls) == 1)
+        record = {"event": "telemetry", "game_bindings": {
+            "nexus": {"unity_code": 114, "age_ms": 10, "source": "fixture"},
+            "autofire": {"unity_code": 105, "age_ms": 10, "source": "fixture"}}}
+        self.app._handle_runtime_record(record)
+        self.assertEqual(self.app.applied_key, "R")
+        self.assertEqual(self.app.key_var.get(), "R")
+        self.assertIn("Autofire: I", self.app.bindings_var.get())
+        self.assertIn("· R ·", self.app.live_vars["applied"].get())
+        record["game_bindings"]["nexus"] = {"unity_code": 119, "age_ms": 251}
+        self.app._handle_runtime_record(record)
+        self.assertEqual(self.app.applied_key, "R")
+        self.assertIn("sin lectura reciente", self.app.bindings_var.get())
+        self.app.applied_detect_keys = False
+        record["game_bindings"]["nexus"] = {"unity_code": 119, "age_ms": 0}
+        self.app._handle_runtime_record(record)
+        self.assertEqual(self.app.applied_key, "R")
+
+    def test_update_install_requires_complete_cleanup_and_failed_launch_keeps_window(self):
+        self.app.updates_panel.portable = True
+        self.app.updates_panel.prepared = object()
+        self.app.cleanup_complete = False
+        with patch("client_ui.launch_update") as launch:
+            self.assertFalse(self.app.updates_panel.install())
+            launch.assert_not_called()
+        self.app.cleanup_complete = True
+        with patch("client_ui.launch_update", side_effect=OSError("No se pudo iniciar")):
+            self.assertFalse(self.app.updates_panel.install())
+        self.assertFalse(self.app.updates_panel.installing)
+        self.assertTrue(self.root.winfo_exists())
+
+    def test_update_launch_success_closes_only_after_worker_is_started(self):
+        self.app.updates_panel.portable = True
+        self.app.updates_panel.prepared = prepared = object()
+        calls = []
+        def launch(value):
+            self.assertIs(value, prepared)
+            self.assertTrue(self.root.winfo_exists())
+            calls.append("launched")
+        with patch("client_ui.launch_update", side_effect=launch):
+            self.assertTrue(self.app.updates_panel.install())
+        self.assertEqual(calls, ["launched"])
+
+    def test_close_waits_for_cancelled_network_worker_in_addition_to_runtime(self):
+        release, cancel_seen = threading.Event(), threading.Event()
+        def check(version, *, cancel_event):
+            cancel_event.wait(2)
+            cancel_seen.set()
+            release.wait(2)
+            return SimpleNamespace(release=SimpleNamespace(version="9.0.0", notes="demo"), available=True)
+        self.app.updates_panel.service = SimpleNamespace(check_for_update=check)
+        self.assertTrue(self.app.updates_panel.check())
+        self.app.close()
+        self.assertTrue(cancel_seen.wait(1))
+        self.assertTrue(self.app.updates_panel.busy)
+        self.assertTrue(self.root.winfo_exists())
+        release.set()
+        self.pump_until(lambda: not self.app.updates_panel.busy)
 
 
 if __name__ == "__main__":

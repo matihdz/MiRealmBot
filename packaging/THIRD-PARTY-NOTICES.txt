@@ -10,6 +10,11 @@ Componentes de la aplicación portátil:
   acuerdo PSF y las licencias adicionales incluidas por la distribución de
   Python, entre ellas las de su código distribuible de Microsoft.
   https://www.python.org/
+- OpenSSL 3.0.16: bibliotecas libssl-3.dll y libcrypto-3.dll utilizadas por
+  Python para HTTPS. Apache License 2.0. Se conservan LICENSE.txt y AUTHORS.md
+  originales de la etiqueta openssl-3.0.16 como OpenSSL-3.0.16-LICENSE.txt y
+  OpenSSL-3.0.16-AUTHORS.md. Esa etiqueta no distribuye un archivo NOTICE.
+  https://github.com/openssl/openssl/tree/openssl-3.0.16
 - Frida 17.24.3: wxWindows Library Licence 3.1, con su excepción para código
   objeto. Frida-COPYING.txt es la copia incluida en el paquete instalado;
   LGPL-2.0.txt conserva también el texto al que remite esa licencia.

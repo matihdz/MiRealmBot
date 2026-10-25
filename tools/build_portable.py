@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 from uuid import uuid4
@@ -26,9 +27,13 @@ RUNTIME_SOURCES = (
     "app_paths.py", "autonexus_core.py", "autonexus_controller.py",
     "damage_prediction.py", "windows_nexus.py", "probe_game.py",
     "live_autonexus.py", "replay_autonexus.py", "client_ui.py",
+    "app_version.py", "update_core.py", "client_updates.py",
+    "autoaim_settings.py", "game_settings.py",
 )
 RESOURCE_FILES = (
     "autonexus_agent.js", "examples/demo-combat.jsonl", "examples/README.md",
+    "updater_worker.ps1",
+    "game_bindings_agent.js", "autoaim_agent.js",
 )
 DOCUMENT_FILES = ("LEEME-PRIMERO.txt", "docs/USO.md")
 PINNED_PACKAGES = {
@@ -42,7 +47,8 @@ REQUIRED_PAYLOAD = (
     "THIRD-PARTY-NOTICES.txt", "licenses/Python-LICENSE.txt",
     "licenses/Frida-COPYING.txt", "licenses/PyInstaller-COPYING.txt",
     "licenses/Tk-license.terms", "licenses/Tcl-8.6.15.txt", "licenses/LGPL-2.0.txt",
-    "_internal/autonexus_agent.js", "_internal/examples/demo-combat.jsonl",
+    "licenses/OpenSSL-3.0.16-LICENSE.txt", "licenses/OpenSSL-3.0.16-AUTHORS.md",
+    *(f"_internal/{relative}" for relative in RESOURCE_FILES),
     "_internal/python312.dll", "_internal/frida/_frida.pyd",
     "_internal/tcl86t.dll", "_internal/tk86t.dll", "_internal/_tkinter.pyd",
 )
@@ -75,6 +81,9 @@ def validate_environment() -> dict[str, str]:
     import tkinter
     if tkinter.Tcl().eval("info patchlevel") != "8.6.15":
         raise RuntimeError("La licencia Tcl incluida corresponde a Tcl 8.6.15; revisa la nueva versión antes de construir.")
+    # CPython exposes OpenSSL 3's patch level in the fourth legacy tuple slot.
+    if ssl.OPENSSL_VERSION_INFO != (3, 0, 0, 16, 0):
+        raise RuntimeError("Las licencias OpenSSL incluidas corresponden a 3.0.16; revisa la nueva versión antes de construir.")
     return versions
 
 
@@ -92,7 +101,8 @@ def collect_licenses(app: Path) -> None:
     target.mkdir()
     shutil.copyfile(Path(sys.base_prefix) / "LICENSE.txt", target / "Python-LICENSE.txt")
     shutil.copyfile(Path(sys.base_prefix) / "tcl/tk8.6/license.terms", target / "Tk-license.terms")
-    for name in ("Tcl-8.6.15.txt", "LGPL-2.0.txt"):
+    for name in ("Tcl-8.6.15.txt", "LGPL-2.0.txt",
+                 "OpenSSL-3.0.16-LICENSE.txt", "OpenSSL-3.0.16-AUTHORS.md"):
         shutil.copyfile(ROOT / "packaging/licenses" / name, target / name)
     for name, prefix in (("frida", "Frida"), ("pyinstaller", "PyInstaller")):
         dist = importlib.metadata.distribution(name)
@@ -150,6 +160,9 @@ def archive_distribution(app: Path, destination: Path) -> None:
 
 
 def build(build_id: str) -> dict:
+    # Keep version comparison and the downloaded manifest on the same source.
+    sys.path.insert(0, str(ROOT))
+    from app_version import VERSION
     versions = validate_environment()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", build_id):
         raise ValueError("build-id sólo puede contener letras, números, guion y subrayado.")
@@ -163,6 +176,10 @@ def build(build_id: str) -> dict:
     selected = RUNTIME_SOURCES + RESOURCE_FILES
     for relative in selected:
         copy_relative(ROOT, source, relative)
+    # The builder owns the asset allowlist. The spec consumes this exact
+    # selection instead of maintaining a second list that can drift.
+    (source / "bundle-resources.json").write_text(
+        json.dumps(RESOURCE_FILES, ensure_ascii=False) + "\n", encoding="utf-8")
     shutil.copyfile(ROOT / "packaging/launcher.py", source / "launcher.py")
     for relative in DOCUMENT_FILES + ("autonexus.example.json",):
         if not (ROOT / relative).is_file():
@@ -191,13 +208,16 @@ def build(build_id: str) -> dict:
     manifest = {
         "format": 1,
         "application": "MiRealmBot",
+        "version": VERSION,
         "build_id": build_id,
         "built_at_utc": datetime.now(timezone.utc).isoformat(),
         "platform": "Windows-x64",
         "python": platform.python_version(),
+        "openssl": ssl.OPENSSL_VERSION,
         "dependencies": versions,
         "build_options": {"layout": "onedir", "console": False, "upx": False},
         "source_files": {relative: sha256(source / relative) for relative in selected},
+        "resource_files": list(RESOURCE_FILES),
         "launcher_sha256": sha256(source / "launcher.py"),
         "configuration_source": "autonexus.example.json",
         "configuration_sha256": sha256(app / "autonexus.json"),

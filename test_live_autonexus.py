@@ -253,14 +253,18 @@ class LiveAutoNexusTests(unittest.TestCase):
                     pass
 
                 def start(self, options):
-                    if options != {"prediction_enabled": True}:
+                    if (options.get("prediction_enabled") is not True or
+                            options.get("detect_game_keys") is not True or
+                            options.get("autoaim", {}).get("active") is not False or
+                            options.get("autoaim", {}).get("enabled") is not False):
                         raise AssertionError(options)
                     return {"pid": 42, "module_path": str(module_path), "bindings": {"test": True}}
 
                 def poll(self):
                     self.poll_count += 1
                     result = payload(sequence=self.poll_count, player_hp=250,
-                                     gate_a=None, gate_b=None, diagnostics={"hit_count": 1})
+                                     gate_a=None, gate_b=None, diagnostics={"hit_count": 1},
+                                     game_bindings={"nexus": {"unity_code": 114, "age_ms": 0}})
                     if self.poll_count == 2:
                         result["events"] = [{"event_id": 1, "kind": "damage", "age_ms": 0,
                                              "frame": {name: result[name] for name in (

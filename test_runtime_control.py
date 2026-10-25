@@ -119,6 +119,7 @@ class WorkerLifecycleTests(unittest.TestCase):
                 if owner.stop_at == "poll":
                     owner.stop.set()
                 return {"sequence": 1, "age_ms": 0, "map_id": "Realm:1", "map_name": "Realm",
+                        "game_bindings": {"nexus": {"unity_code": 114, "age_ms": 0}},
                         "player_hp": 20, "max_hp": 100, "gate_a": None, "gate_b": None,
                         "tracked_hp": None}
 

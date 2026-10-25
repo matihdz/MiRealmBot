@@ -1,11 +1,13 @@
-MiRealmBot - Inicio rápido
+MiRealmBot 0.2.0 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
 3. Abre RotMG Exalt con el launcher oficial y deja el personaje en Nexus.
-4. En MiRealmBot entra en "Juego en vivo".
-5. Elige la MISMA tecla que tienes configurada en el juego para volver al Nexus.
-   CTRL = Control izquierdo. También puedes elegir R u otra tecla admitida.
+4. En MiRealmBot abre "AutoAim" y deja marcada "Leer teclas del juego".
+5. La tecla Nexus se confirma dentro del juego al iniciar la sesión.
+   Si la detección falla, detén la sesión, desmarca "Leer teclas del juego"
+   y elige la MISMA tecla manualmente. CTRL = Control izquierdo.
+   Después abre "Juego en vivo".
 6. Para comprobar las lecturas, selecciona "Observar" e "Iniciar observación".
 7. Cuando veas tu vida y mapa, pulsa "Detener".
 8. Ajusta el porcentaje y la predicción. Para empezar a probar, el paquete trae 90 %.
@@ -21,6 +23,27 @@ IMPORTANTE PARA USARLO
 - Si cambió la versión del juego y el perfil no coincide, necesitas una actualización.
 - La predicción implementada cubre proyectiles; no cubre todos los daños del juego.
 - Pulsa Detener para cerrar la sesión o cambiar parámetros.
+
+AUTOAIM OPCIONAL
+- Con la sesión detenida, abre AutoAim y marca "Activar AutoAim".
+- El modo Close to Mouse elige un enemigo cercano al cursor.
+- Para empezar, deja Extrapolation en 302 y Radio junto al cursor en 4.
+- Selecciona Activo y pulsa "Iniciar sesión activa".
+- Vuelve al juego y enciende su autofire con tu tecla configurada.
+- No necesitas mantener una tecla adicional. Sólo actúa con autofire encendido
+  y el juego sin pausa. No mueve el cursor ni activa ataques por sí mismo.
+- Extrapolation 0 apunta a la posición actual; valores mayores adelantan más.
+- La prueba de AutoAim en combate sigue pendiente para este perfil.
+
+ACTUALIZAR
+- La versión 0.2.0 busca novedades en GitHub al abrirse.
+- Abre Actualizaciones y pulsa "Buscar actualizaciones".
+- Si hay una versión nueva, pulsa "Descargar actualización".
+- Detén la sesión, espera su limpieza y pulsa "Instalar y reiniciar".
+- Conserva tus parámetros, registros y copias; deja toda la carpeta anterior
+  como respaldo junto a la instalación.
+- Si aún usas 0.1.0, descarga y extrae 0.2.0 manualmente una vez.
+  Después podrás actualizar desde el programa.
 
 Guía completa: docs/USO.md
 Última versión: https://github.com/matihdz/MiRealmBot/releases/latest

@@ -3,26 +3,62 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import importlib.metadata
+import hashlib
 import json
 from pathlib import Path
 import sys
 
 
+def check_release_assets(app_root: Path, resource_root: Path, version: str) -> dict:
+    """Check the builder's retained selection; never execute script assets."""
+    manifest = json.loads((app_root / "BUILD-MANIFEST.json").read_text(encoding="utf-8"))
+    if (manifest.get("format") != 1 or manifest.get("application") != "MiRealmBot"
+            or manifest.get("version") != version):
+        raise RuntimeError("La versión del manifiesto no corresponde a esta aplicación")
+    selected = manifest.get("resource_files")
+    if not isinstance(selected, list) or not selected:
+        raise RuntimeError("El manifiesto no conserva la selección de recursos")
+    checked = {}
+    for relative in selected:
+        if (not isinstance(relative, str) or not relative or "\\" in relative
+                or Path(relative).is_absolute() or any(part in ("..", "") for part in relative.split("/"))):
+            raise RuntimeError("El manifiesto contiene un recurso sin ruta relativa válida")
+        path = resource_root / relative
+        if not path.is_file():
+            raise RuntimeError(f"Falta el recurso incluido: {relative}")
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        retained = manifest.get("files", {}).get("_internal/" + relative, {})
+        if not data or retained.get("sha256") != digest or retained.get("bytes") != len(data):
+            raise RuntimeError(f"El recurso no coincide con el manifiesto: {relative}")
+        checked[relative] = digest
+    return {"manifest_version": manifest["version"], "checked_resources": checked}
+
+
 def portable_self_test() -> int:
     """Exercise bundled imports/assets and replay without touching the game."""
     from app_paths import APP_ROOT, RESOURCE_ROOT, resource_path
-    import frida
-    import tkinter as tk
-    from live_autonexus import load_config
-    from replay_autonexus import load_recording, compare_thresholds
-
     report = {
         "frozen": bool(getattr(sys, "frozen", False)),
         "game_accessed": False,
         "input_sent": False,
+        "network_accessed": False,
+        "updates_executed": False,
     }
     output = APP_ROOT / "analysis" / "portable-self-test.json"
     try:
+        import frida
+        import tkinter as tk
+        from app_version import VERSION
+        import autoaim_settings
+        import game_settings
+        import client_updates
+        import update_core
+        from live_autonexus import load_config
+        from replay_autonexus import load_recording, compare_thresholds
+
+        report["version"] = VERSION
+        report.update(check_release_assets(APP_ROOT, RESOURCE_ROOT, VERSION))
         config = load_config(APP_ROOT / "autonexus.json")
         agent = resource_path("autonexus_agent.js")
         if not agent.is_file() or agent.stat().st_size == 0:
@@ -42,8 +78,21 @@ def portable_self_test() -> int:
             root.destroy()
         # Importing the window must not start its worker or attach to a process.
         import client_ui  # noqa: F401
+        if client_ui.VERSION != VERSION or client_updates.VERSION != VERSION or update_core.VERSION != VERSION:
+            raise RuntimeError("La interfaz y las actualizaciones tienen versiones distintas")
+        default_aim = autoaim_settings.parse_autoaim()
+        if default_aim.enabled:
+            raise RuntimeError("AutoAim no debe activarse por defecto")
+        # Parse an empty supplied mapping; do not inspect the local registry.
+        bindings = game_settings.parse_game_bindings({})
         report.update({
             "ok": True,
+            "ui_version": client_ui.VERSION,
+            "update_version": update_core.VERSION,
+            "new_modules_imported": ["autoaim_settings", "game_settings", "client_updates", "update_core"],
+            "default_autoaim_enabled": default_aim.enabled,
+            "game_preferences_accessed": False,
+            "binding_parser_controls": sorted(bindings),
             "frida_version": frida.__version__,
             "frida_metadata_version": importlib.metadata.version("frida"),
             "tcl_version": tcl_version,

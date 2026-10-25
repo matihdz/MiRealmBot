@@ -16,11 +16,16 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from app_paths import APP_ROOT
+from app_version import VERSION
 from autonexus_core import AutoNexus
+from client_updates import UpdatePanel
+from game_settings import read_game_bindings, unity_key_name
 from live_autonexus import (config_from_mapping, config_to_mapping, load_config,
                             run_runtime, save_config)
 from replay_autonexus import (DEFAULT_RECORDING, compare_thresholds,
                               load_recording, replay_recording)
+from update_core import launch_update
+from windows_nexus import normalize_nexus_key
 
 ROOT = APP_ROOT
 BG = "#0b1220"
@@ -114,10 +119,16 @@ class RuntimeInbox:
 
 class App:
     def __init__(self, root, *, config_path=None, recording_path=None,
-                 runtime_runner=None):
+                 runtime_runner=None, settings_reader=None, auto_check_updates=False,
+                 update_service=None, portable_updates=None):
         self.root = root
         self.config_path = Path(config_path or ROOT / "autonexus.json")
         self.runtime_runner = runtime_runner or run_runtime
+        self.settings_reader = settings_reader or read_game_bindings
+        self.auto_check_updates = auto_check_updates
+        self.update_service = update_service
+        self.portable_updates = portable_updates
+        self.game_bindings = {}
         self.runtime_thread = None
         self.stop_event = None
         self.runtime_inbox = RuntimeInbox()
@@ -141,6 +152,9 @@ class App:
         self.live_active = False
         self.live_mapping = config_to_mapping(load_config(self.config_path))
         self.applied_key = self.live_mapping["nexus_key"]
+        self.applied_detect_keys = self.live_mapping.get("detect_game_keys", True)
+        self.applied_config = None
+        self.nexus_binding_status = None
         self.replay_draft = {"threshold_percent": 30.0, "prediction_enabled": True}
         self.live_draft = {"threshold_percent": self.live_mapping["threshold"] * 100,
                            "prediction_enabled": self.live_mapping["prediction_enabled"]}
@@ -148,6 +162,12 @@ class App:
         self.slider_var = tk.DoubleVar(root, 30)
         self.prediction_var = tk.BooleanVar(root, True)
         self.key_var = tk.StringVar(root, self.live_mapping["nexus_key"])
+        self.detect_keys_var = tk.BooleanVar(root, self.live_mapping.get("detect_game_keys", True))
+        aim = self.live_mapping["autoaim"]
+        self.aim_enabled_var = tk.BooleanVar(root, aim["enabled"])
+        self.extrapolation_var = tk.StringVar(root, f"{aim['extrapolation']:g}")
+        self.aim_radius_var = tk.StringVar(root, f"{aim['mouse_radius']:g}")
+        self.bindings_var = tk.StringVar(root, "Todavía no se han leído las teclas del juego.")
         self.mode_var = tk.StringVar(root, "observe")
         self.speed_var = tk.StringVar(root, "10×")
         self.scrub_var = tk.DoubleVar(root, 0)
@@ -159,6 +179,7 @@ class App:
         self.threshold_var.trace_add("write", self._parameter_changed)
         self.prediction_var.trace_add("write", self._parameter_changed)
         self._load_recording(Path(recording_path or DEFAULT_RECORDING))
+        self.refresh_game_bindings()
         self._sync_context()
         self._schedule(60, self._tick)
 
@@ -172,7 +193,7 @@ class App:
         return token
 
     def _style(self):
-        self.root.title("MiRealmBot · AutoNexus")
+        self.root.title(f"MiRealmBot {VERSION} · AutoNexus / AutoAim")
         self.root.geometry("1180x850")
         self.root.minsize(1040, 760)
         self.root.configure(bg=BG)
@@ -235,7 +256,7 @@ class App:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         self._label(header, "MiRealmBot", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        self._label(header, "AUTO NEXUS   /   CONFIGURACIÓN Y REPRODUCCIÓN", style="Muted.TLabel",
+        self._label(header, "AUTO NEXUS   /   AUTO AIM   /   CONFIGURACIÓN", style="Muted.TLabel",
                     font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
         self.status_pill = tk.Label(header, textvariable=self.status_var, background=SURFACE,
                                     foreground=TEAL, padx=15, pady=8, font=("Segoe UI Semibold", 10))
@@ -260,12 +281,19 @@ class App:
         self.notebook.grid(row=1, column=0, sticky="nsew")
         self.replay_tab = ttk.Frame(self.notebook, padding=(0, 14, 0, 0))
         self.live_tab = ttk.Frame(self.notebook, padding=(0, 14, 0, 0))
+        self.aim_tab = ttk.Frame(self.notebook, padding=(0, 14, 0, 0))
         self.notebook.add(self.replay_tab, text="Reproducir registro")
         self.notebook.add(self.live_tab, text="Juego en vivo")
+        self.notebook.add(self.aim_tab, text="AutoAim")
+        self.updates_panel = UpdatePanel(self.notebook, can_install=self._can_install_update,
+            request_install=self._install_update, service=self.update_service,
+            portable=self.portable_updates, auto_check=self.auto_check_updates)
+        self.notebook.add(self.updates_panel, text="Actualizaciones")
         self.notebook.bind("<<NotebookTabChanged>>", self._tab_changed)
         self._build_replay()
         self._build_live()
-        self.footer_var = tk.StringVar(self.root, "Todo ocurre en este equipo · Abrir la interfaz no inicia el bot")
+        self._build_autoaim()
+        self.footer_var = tk.StringVar(self.root, "Abrir la interfaz no inicia el bot · Las actualizaciones consultan GitHub")
         ttk.Label(self.root, textvariable=self.footer_var, style="Muted.TLabel", padding=(22, 2, 22, 10),
                   font=("Segoe UI", 9)).grid(row=2, column=0, sticky="ew")
 
@@ -455,8 +483,93 @@ class App:
         self._label(p, "La predicción cubre golpes aceptados de proyectiles; no anticipa trayectorias ni garantiza una salida a tiempo.",
                     style="Muted.TLabel", wraplength=810, font=("Segoe UI", 9)).grid(row=8, column=0, sticky="ew", pady=(12, 0))
 
+    def _build_autoaim(self):
+        p = self.aim_tab
+        p.columnconfigure(0, weight=1)
+        self._label(p, "AutoAim · Close to Mouse", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w")
+        self._label(p, "Elige el enemigo cercano al cursor. Se aplica al iniciar la sesión en vivo.",
+                    style="Muted.TLabel", wraplength=740).grid(row=1, column=0, sticky="w", pady=(5, 14))
+        controls = ttk.Frame(p, style="Panel.TFrame", padding=18)
+        controls.grid(row=2, column=0, sticky="ew")
+        controls.columnconfigure(1, weight=1)
+        self.aim_enabled_check = ttk.Checkbutton(controls, text="Activar AutoAim",
+                                                variable=self.aim_enabled_var)
+        self.aim_enabled_check.grid(row=0, column=0, columnspan=2, sticky="w")
+        self._label(controls, "Modo", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w", pady=8)
+        self._label(controls, "Close to Mouse", style="Panel.TLabel").grid(row=1, column=1, sticky="w")
+        self._label(controls, "Extrapolation", style="PanelMuted.TLabel").grid(row=2, column=0, sticky="w", pady=8)
+        self.extrapolation_input = ttk.Spinbox(controls, from_=0, to=1000000000, increment=1,
+                                              textvariable=self.extrapolation_var, width=12)
+        self.extrapolation_input.grid(row=2, column=1, sticky="w")
+        self._label(controls, "0 apunta a la posición actual. Un valor mayor adelanta más la puntería "
+                    "según el movimiento del enemigo.",
+                    style="PanelMuted.TLabel", wraplength=650, font=("Segoe UI", 9)).grid(
+                        row=3, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self._label(controls, "Radio junto al cursor", style="PanelMuted.TLabel").grid(row=4, column=0, sticky="w", pady=8)
+        self.aim_radius_input = ttk.Spinbox(controls, from_=0.1, to=1000000000, increment=.5,
+                                          textvariable=self.aim_radius_var, width=12)
+        self.aim_radius_input.grid(row=4, column=1, sticky="w")
+        self._label(controls, "Con AutoAim habilitado y modo Activo, apunta mientras el autofire del juego está encendido. "
+                    "No necesitas mantener una tecla pulsada. Observar calcula sin alterar los disparos.",
+                    style="PanelMuted.TLabel", wraplength=680).grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        bindings = ttk.Frame(p, style="Panel.TFrame", padding=18)
+        bindings.grid(row=3, column=0, sticky="ew", pady=(12, 12))
+        bindings.columnconfigure(0, weight=1)
+        self.detect_keys_check = ttk.Checkbutton(bindings, text="Leer teclas del juego",
+            variable=self.detect_keys_var, command=self.refresh_game_bindings)
+        self.detect_keys_check.grid(row=0, column=0, sticky="w")
+        self.refresh_keys_button = ttk.Button(bindings, text="Volver a leer teclas", command=self.refresh_game_bindings)
+        self.refresh_keys_button.grid(row=0, column=1, sticky="e")
+        self._label(bindings, "", textvariable=self.bindings_var, style="PanelMuted.TLabel",
+                    wraplength=680).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.aim_status_var = tk.StringVar(self.root, "Sin sesión · AutoAim no está actuando")
+        self._label(p, "", textvariable=self.aim_status_var, wraplength=730).grid(row=4, column=0, sticky="ew", pady=(5, 14))
+        buttons = ttk.Frame(p)
+        buttons.grid(row=5, column=0, sticky="ew")
+        self.aim_start_button = ttk.Button(buttons, text="Iniciar observación", style="Accent.TButton", command=self.start_live)
+        self.aim_start_button.pack(side="left", padx=(0, 9))
+        self.aim_stop_button = ttk.Button(buttons, text="Detener", command=self.stop_live, state="disabled")
+        self.aim_stop_button.pack(side="left")
+
+    def refresh_game_bindings(self):
+        if self.runtime_thread is not None:
+            return
+        self._sync_context()
+        if not self.detect_keys_var.get():
+            self.bindings_var.set("Lectura desactivada. Nexus usará la tecla manual de la izquierda; "
+                                  "AutoAim observa el estado de autofire dentro del juego.")
+            self.key_hint.configure(text="Tecla manual para la próxima sesión en vivo.")
+            return
+        try:
+            self.game_bindings = self.settings_reader()
+        except Exception:
+            self.game_bindings = {}
+            self.bindings_var.set("No se pudieron leer las teclas guardadas. Se comprobarán dentro del juego al iniciar.")
+            self.key_hint.configure(text="La tecla Nexus se comprobará dentro del juego al iniciar.")
+            return
+        nexus, autofire = (self.game_bindings.get(name) for name in ("nexus", "autofire"))
+        try:
+            detected = normalize_nexus_key(nexus.key if nexus else None)
+        except ValueError:
+            detected = None
+        if detected:
+            self.key_var.set(detected)
+            nexus_text = f"Nexus: {detected} (guardada en el juego); se confirmará dentro del juego al iniciar."
+            self.key_hint.configure(text=f"Nexus guardada: {detected}. Se confirmará dentro del juego al iniciar.")
+        else:
+            nexus_text = "Nexus: sin valor guardado reconocido; se leerá dentro del juego al iniciar."
+            self.key_hint.configure(text="La tecla Nexus se leerá dentro del juego al iniciar.")
+        fire_text = (f" Autofire: {autofire.key} (guardada en el juego); se confirmará al iniciar." if autofire and autofire.key else
+                     " Autofire: sin valor guardado reconocido; se leerá dentro del juego al iniciar.")
+        self.bindings_var.set(nexus_text + fire_text)
+
+    def _updates_selected(self):
+        return self.notebook.select() == str(self.updates_panel)
+
     def _tab_changed(self, event=None):
-        selected = "live" if self.notebook.select() == str(self.live_tab) else "replay"
+        tab = self.notebook.select()
+        selected = ("live" if tab in (str(self.live_tab), str(self.aim_tab)) else
+                    "replay" if tab == str(self.replay_tab) else self.active_context)
         if selected != self.active_context:
             self._store_draft()
             self.active_context = selected
@@ -521,24 +634,35 @@ class App:
     def _sync_context(self):
         live = self.active_context == "live"
         running = self.runtime_thread is not None
-        self.parameter_title.configure(text="Parámetros del juego" if live else "Parámetros del registro")
-        state = "disabled" if live and running else "normal"
+        updates = self._updates_selected()
+        installing = self.updates_panel.installing
+        self.parameter_title.configure(text="Actualizaciones" if updates else "Parámetros del juego" if live else "Parámetros del registro")
+        state = "disabled" if updates or installing or (live and running) else "normal"
         self.threshold_input.configure(state=state)
         self.threshold_slider.configure(state=state)
         self.prediction_check.configure(state=state)
-        self.key_combo.configure(state="readonly" if live and not running else "disabled")
+        self.key_combo.configure(state="readonly" if live and not running and not updates and not installing
+                                 and not self.detect_keys_var.get() else "disabled")
         for widget in (self.observe_radio, self.active_radio):
-            widget.configure(state="normal" if live and not running else "disabled")
-        self.save_button.configure(state="normal" if live and not running else "disabled")
-        self.start_button.configure(state="normal" if not running and self.cleanup_complete else "disabled")
-        self.stop_button.configure(state="normal" if running and not self.stop_event.is_set() else "disabled")
+            widget.configure(state="normal" if live and not running and not updates and not installing else "disabled")
+        self.save_button.configure(state="normal" if live and not running and not updates and not installing else "disabled")
+        for widget in (self.aim_enabled_check, self.extrapolation_input, self.aim_radius_input,
+                       self.detect_keys_check, self.refresh_keys_button):
+            widget.configure(state="disabled" if running or installing else "normal")
+        for widget in (self.start_button, self.aim_start_button):
+            widget.configure(state="normal" if not running and self.cleanup_complete and not installing and not self.closing else "disabled")
+        for widget in (self.stop_button, self.aim_stop_button):
+            widget.configure(state="normal" if running and not self.stop_event.is_set() else "disabled")
         self.copy_button.configure(state="disabled" if running else "normal")
-        self.draft_var.set("Sólo cambia esta reproducción. «Usar en vivo» copia el borrador." if not live else
+        self.draft_var.set("Detén el bot antes de instalar una actualización." if updates else
+                           "Sólo cambia esta reproducción. «Usar en vivo» copia el borrador." if not live else
                            "Parámetros bloqueados durante la sesión." if running else "Borrador para la próxima sesión; guardar no inicia el bot.")
         self._update_banner()
 
     def _update_banner(self):
-        if self.active_context == "replay":
+        if self._updates_selected() and self.runtime_thread is None:
+            text, color, bg = "ACTUALIZACIONES · CONSULTA Y DESCARGA DESDE GITHUB", BLUE, "#192e49"
+        elif self.active_context == "replay":
             text, color, bg = "SIMULACIÓN · SIN CONEXIÓN AL JUEGO", TEAL, "#143732"
             if self.runtime_thread is not None:
                 if self.live_active:
@@ -554,9 +678,15 @@ class App:
             text, color, bg = "DETENIDO · MODO ACTIVO SE APLICA AL PULSAR INICIAR", AMBER, "#44321f"
         else:
             text, color, bg = "DETENIDO · OBSERVACIÓN SE APLICA AL PULSAR INICIAR", BLUE, "#192e49"
+        if self.runtime_thread is not None and self.live_active and self.applied_detect_keys:
+            if self.nexus_binding_status == "waiting":
+                text = "ACTIVO · NEXUS ESPERA LEER LA TECLA DEL JUEGO"
+            elif self.nexus_binding_status == "unsupported":
+                text = "ACTIVO · TECLA NEXUS NO ADMITIDA"
         self.banner_var.set(text)
         self.banner.configure(background=bg, foreground=color)
         self.start_button.configure(text="Iniciar AutoNexus activo" if self.mode_var.get() == "active" else "Iniciar observación")
+        self.aim_start_button.configure(text="Iniciar sesión activa" if self.mode_var.get() == "active" else "Iniciar observación")
 
     def choose_recording(self):
         selected = filedialog.askopenfilename(parent=self.root, title="Abrir registro de MiRealmBot",
@@ -789,14 +919,25 @@ class App:
         self._store_draft()
         data = dict(self.live_mapping)
         data.update(threshold=self.live_draft["threshold_percent"] / 100,
-                    prediction_enabled=self.live_draft["prediction_enabled"], nexus_key=self.key_var.get())
+                    prediction_enabled=self.live_draft["prediction_enabled"], nexus_key=self.key_var.get(),
+                    detect_game_keys=self.detect_keys_var.get(), autoaim={
+                        "enabled": self.aim_enabled_var.get(), "mode": "close_to_mouse",
+                        "activation": "autofire", "extrapolation": self._aim_number(self.extrapolation_var, "Extrapolation"),
+                        "mouse_radius": self._aim_number(self.aim_radius_var, "Radio junto al cursor")})
         # Validate even when text did not become a valid draft.
         if self.active_context == "live":
             data["threshold"] = self._threshold() / 100
         return config_from_mapping(data)
 
+    @staticmethod
+    def _aim_number(variable, label):
+        try:
+            return float(variable.get().replace(",", "."))
+        except (ValueError, tk.TclError):
+            raise ValueError(f"{label} debe ser un número válido") from None
+
     def save_parameters(self):
-        if self.runtime_thread is not None or self.active_context != "live":
+        if self.runtime_thread is not None or self.active_context != "live" or self._updates_selected() or self.updates_panel.installing:
             return
         try:
             config = self._live_config()
@@ -810,8 +951,10 @@ class App:
         self.draft_var.set("Guardado. Se aplicará al próximo inicio.")
 
     def start_live(self):
-        if self.active_context != "live" or self.runtime_thread is not None or not self.cleanup_complete:
+        if self.active_context != "live" or self._updates_selected() or self.runtime_thread is not None or not self.cleanup_complete or self.closing or self.updates_panel.installing:
             return False
+        if self.detect_keys_var.get():
+            self.refresh_game_bindings()
         try:
             config = self._live_config()
         except (ValueError, TypeError) as error:
@@ -824,11 +967,15 @@ class App:
         self.cleanup_complete = False
         self.live_active = self.mode_var.get() == "active"
         self.applied_key = config.nexus_key
+        self.applied_config = config
+        self.applied_detect_keys = config.detect_game_keys
+        self.nexus_binding_status = "waiting" if config.detect_game_keys else "manual"
         self.live_status = "Conectando"
         self.status_var.set(self.live_status)
         self.live_vars["error"].set("Ninguno")
         self.live_vars["delivery"].set("Ninguna")
-        self.live_vars["applied"].set(f"{config.threshold * 100:g} % · {config.nexus_key} · predicción " + ("sí" if config.prediction_enabled else "no"))
+        self.aim_status_var.set("Esperando datos de AutoAim del juego…" if config.autoaim.enabled else "AutoAim desactivado")
+        self._render_applied_config()
         self.live_hint_var.set("Conectando con el juego…")
         def worker():
             try:
@@ -842,6 +989,64 @@ class App:
         self.runtime_thread = threading.Thread(target=worker, name="MiRealmBot-runtime", daemon=False)
         self.runtime_thread.start()
         self._sync_context()
+        return True
+
+    def _can_install_update(self):
+        if self.runtime_thread is not None:
+            return False, "Detén AutoNexus y AutoAim y espera a que termine la sesión."
+        if not self.cleanup_complete:
+            return False, "No se confirmó la limpieza del juego. Cierra el juego y vuelve a abrir MiRealmBot antes de instalar."
+        if self.closing:
+            return False, "MiRealmBot ya se está cerrando."
+        return True, ""
+
+    def _render_applied_config(self):
+        if self.applied_config is not None:
+            config = self.applied_config
+            key = ("Nexus pendiente de lectura" if self.nexus_binding_status == "waiting" else
+                   "Tecla Nexus no admitida" if self.nexus_binding_status == "unsupported" else self.applied_key)
+            self.live_vars["applied"].set(f"{config.threshold * 100:g} % · {key} · predicción " +
+                ("sí" if config.prediction_enabled else "no") + " · AutoAim " + ("sí" if config.autoaim.enabled else "no"))
+
+    def _show_runtime_bindings(self, bindings):
+        if not isinstance(bindings, dict) or not self.applied_detect_keys:
+            return
+        resolved = {}
+        for name in ("nexus", "autofire"):
+            item = bindings.get(name)
+            if not isinstance(item, dict):
+                continue
+            age = item.get("age_ms")
+            if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age) or not 0 <= age <= 250:
+                continue
+            key = unity_key_name(item.get("unity_code"))
+            if key:
+                resolved[name] = key
+        nexus = resolved.get("nexus")
+        if nexus:
+            self.nexus_binding_status = "detected"
+            try:
+                nexus = normalize_nexus_key(nexus)
+            except ValueError:
+                nexus = None
+        if nexus:
+            self.applied_key = nexus
+            self.key_var.set(nexus)
+            self._render_applied_config()
+            self.key_hint.configure(text=f"Nexus detectada dentro del juego: {nexus}.")
+        parts = [f"Nexus: {nexus} (detectada dentro del juego)." if nexus else "Nexus: sin lectura reciente reconocida."]
+        parts.append(f"Autofire: {resolved['autofire']} (detectada dentro del juego)." if "autofire" in resolved else
+                     "Autofire: sin lectura reciente reconocida.")
+        self.bindings_var.set(" ".join(parts))
+        self._update_banner()
+
+    def _install_update(self, prepared):
+        allowed, reason = self._can_install_update()
+        if not allowed:
+            self.updates_panel.recover_install_error(reason)
+            return False
+        launch_update(prepared)
+        self.close()
         return True
 
     def stop_live(self):
@@ -879,7 +1084,7 @@ class App:
                                        "La limpieza quedó incompleta. No se permite iniciar otra sesión.")
             elif status == "running":
                 self.live_status = "Activo" if self.live_active else "Observando"
-                self.live_hint_var.set("Vuelve a la ventana del juego para que pueda recibir la tecla Nexus.")
+                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa en modo Activo cuando el autofire está encendido.")
             elif status == "stopping":
                 self.live_status = "Deteniendo"
             else:
@@ -895,12 +1100,28 @@ class App:
         elif kind == "cleanup":
             self._append_log("Limpieza: " + ("completa" if record.get("complete", record.get("cleanup_complete")) else str(record.get("errors", "en curso"))))
         elif kind == "telemetry":
+            if self.applied_detect_keys and record.get("nexus_binding_status") in ("waiting", "unsupported", "detected"):
+                self.nexus_binding_status = record["nexus_binding_status"]
+            self._show_runtime_bindings(record.get("game_bindings"))
+            self._render_applied_config()
+            self._update_banner()
             frame, prediction = record.get("frame") or {}, record.get("prediction") or {}
             self.live_observed_var.set(f"{number(frame.get('player_hp'))} / {number(frame.get('max_hp'))}")
             self.live_predicted_var.set(number(prediction.get("tracked_hp")) if prediction.get("enabled") else "Desactivado")
             self.live_vars["map"].set(record.get("map_name") or frame.get("map_name") or "Sin datos recientes")
             decision = record.get("decision") or {}
             self.live_vars["decision"].set("SOLICITAR NEXUS" if decision.get("action") == "escape" else short_reason(decision.get("reason")))
+            if self.applied_detect_keys and self.nexus_binding_status == "waiting":
+                self.live_vars["decision"].set("Esperando tecla Nexus del juego")
+                self.key_hint.configure(text="Esperando una lectura reciente de la tecla Nexus dentro del juego.")
+                self.live_hint_var.set("Esperando tecla Nexus del juego. La sesión aún no puede solicitar una salida.")
+            elif self.applied_detect_keys and self.nexus_binding_status == "unsupported":
+                self.live_vars["decision"].set("Tecla Nexus no admitida")
+                self.key_hint.configure(text="Tecla no admitida. Detén la sesión y configura una letra o Control.")
+                self.live_hint_var.set("La tecla Nexus del juego no está admitida. Detén la sesión y configura una letra o Control; "
+                                       "o desmarca «Leer teclas del juego» y elige una tecla manual que coincida con el juego.")
+            elif record.get("nexus_binding_status") in ("detected", "manual"):
+                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa en modo Activo cuando el autofire está encendido.")
             focus = record.get("game_foreground")
             self.live_vars["focus"].set("En primer plano" if focus is True else "Vuelve a la ventana del juego" if focus is False else "Sin comprobar")
             delivery = record.get("delivery") or {}
@@ -908,8 +1129,27 @@ class App:
                 labels = {"observe_only": "Sólo observación · no se envió la tecla", "key_sent": "Tecla enviada · Nexus sin confirmar",
                           "blocked": "Tecla bloqueada · no se reintentará en este mapa", "failed": "Falló el envío de la tecla"}
                 self.live_vars["delivery"].set(labels.get(delivery.get("status"), str(delivery.get("status"))))
+            aim = record.get("autoaim")
+            if isinstance(aim, dict):
+                if aim.get("enabled") is False:
+                    text = "AutoAim desactivado"
+                else:
+                    fire = aim.get("autofire")
+                    fire_text = "encendido" if fire is True else "apagado" if fire is False else "sin confirmar"
+                    authority = ("Pausado" if aim.get("paused") is True else "Activo" if aim.get("active") is True
+                                 else "Observación · no altera los disparos" if aim.get("active") is False
+                                 else "Estado sin confirmar")
+                    text = f"{authority} · autofire {fire_text}"
+                    if aim.get("target_id") is not None:
+                        text += f" · enemigo {aim['target_id']}"
+                    if isinstance(aim.get("angle"), (int, float)) and math.isfinite(aim["angle"]):
+                        text += f" · ángulo {aim['angle']:.2f}"
+                    if aim.get("status"):
+                        text += " · " + str(aim["status"])[:160]
+                self.aim_status_var.set(text)
 
     def _tick(self):
+        self.updates_panel.tick()
         if self.playing and self.recording is not None:
             now = time.monotonic()
             speed = float(self.speed_var.get().rstrip("×"))
@@ -937,20 +1177,24 @@ class App:
                 self.status_var.set("Error")
                 self.live_hint_var.set("El runtime terminó sin confirmar la limpieza. Reinicio bloqueado.")
             self._sync_context()
-            if self.closing and self.cleanup_complete:
-                self._destroy()
-                return
-            if self.closing:
+            if self.closing and not self.cleanup_complete:
                 self.closing = False
                 self.footer_var.set("La ventana permanece abierta porque falta confirmar la limpieza del runtime.")
+        if self.closing and self.runtime_thread is None and not self.updates_panel.busy:
+            self._destroy()
+            return
         self._schedule(60, self._tick)
 
     def close(self):
         self.playing = False
+        self.closing = True
+        updates_done = self.updates_panel.close()
         if self.runtime_thread is not None:
-            self.closing = True
             self.stop_live()
             self.footer_var.set("Cerrando: se espera a que el runtime termine y confirme la limpieza…")
+            return
+        if not updates_done:
+            self.footer_var.set("Cerrando: se cancela la consulta o descarga de GitHub; espera a que termine…")
             return
         self._destroy()
 
@@ -968,7 +1212,7 @@ def main():
         messagebox.showerror("Error de la interfaz", str(error), parent=root)
     root.report_callback_exception = show_callback_error
     try:
-        App(root)
+        App(root, auto_check_updates=True)
     except Exception as error:
         root.withdraw()
         messagebox.showerror("MiRealmBot no pudo abrirse", str(error), parent=root)

@@ -1,16 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Onedir, windowed build. build_portable.py supplies an allowlisted source tree."""
 import os
+import json
 from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
 
 source = Path(os.environ["MIREALMBOT_BUILD_SOURCE_ROOT"])
-datas = [
-    (str(source / "autonexus_agent.js"), "."),
-    (str(source / "examples" / "demo-combat.jsonl"), "examples"),
-    (str(source / "examples" / "README.md"), "examples"),
-]
+resource_files = json.loads((source / "bundle-resources.json").read_text(encoding="utf-8"))
+datas = [(str(source / relative), str(Path(relative).parent))
+         for relative in resource_files]
 datas += copy_metadata("frida")
 
 a = Analysis(

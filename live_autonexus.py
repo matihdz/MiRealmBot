@@ -20,9 +20,11 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from app_paths import APP_ROOT, resource_path
+from autoaim_settings import AutoAimSettings, autoaim_mapping, parse_autoaim
 from autonexus_controller import Controller, HealthFrame
 from autonexus_core import Action, AutoNexus, Decision
 from damage_prediction import AcceptedHitPrediction, finite_age
+from game_settings import unity_key_name
 from probe_game import EXPECTED_EXE, ProcessIdentity
 from windows_nexus import (NexusInputBlocked, NexusInputError, WindowsNexus,
                            Win32InputBackend, normalize_nexus_key)
@@ -42,6 +44,8 @@ class RuntimeConfig:
     gameassembly_sha256: str
     use_state_filters: bool = False
     prediction_enabled: bool = False
+    autoaim: AutoAimSettings = AutoAimSettings()
+    detect_game_keys: bool = True
 
 
 def config_from_mapping(data: object, threshold_percent: float | None = None) -> RuntimeConfig:
@@ -69,11 +73,15 @@ def config_from_mapping(data: object, threshold_percent: float | None = None) ->
     prediction_enabled = data.get("prediction_enabled", False)
     if not isinstance(prediction_enabled, bool):
         raise ValueError("prediction_enabled debe ser true o false")
+    detect_game_keys = data.get("detect_game_keys", True)
+    if not isinstance(detect_game_keys, bool):
+        raise ValueError("detect_game_keys debe ser true o false")
+    autoaim = parse_autoaim(data.get("autoaim"))
     # Validate now, before saving or starting a worker. Retain the supplied
     # fraction; AutoNexus owns its float32 representation when used.
     Controller(AutoNexus(threshold, use_state_filters=use_state_filters), names)
     return RuntimeConfig(threshold, key, tuple(names), pin.lower(), use_state_filters,
-                         prediction_enabled)
+                         prediction_enabled, autoaim, detect_game_keys)
 
 
 def load_config(path: Path, threshold_percent: float | None = None) -> RuntimeConfig:
@@ -87,7 +95,32 @@ def config_to_mapping(config: RuntimeConfig) -> dict[str, Any]:
             "excluded_maps": list(config.excluded_maps),
             "gameassembly_sha256": config.gameassembly_sha256,
             "use_state_filters": config.use_state_filters,
-            "prediction_enabled": config.prediction_enabled}
+            "prediction_enabled": config.prediction_enabled,
+            "autoaim": autoaim_mapping(config.autoaim),
+            "detect_game_keys": config.detect_game_keys}
+
+
+def resolve_game_nexus_key(payload: object, config: RuntimeConfig) -> tuple[str | None, str]:
+    """Use the game's current resolved binding, or the explicit manual policy."""
+    if not config.detect_game_keys:
+        return config.nexus_key, "manual"
+    if not isinstance(payload, dict):
+        return None, "waiting"
+    bindings = payload.get("game_bindings")
+    binding = bindings.get("nexus") if isinstance(bindings, dict) else None
+    if not isinstance(binding, dict):
+        return None, "waiting"
+    try:
+        age = finite_age(binding.get("age_ms"))
+    except ValueError:
+        return None, "waiting"
+    if age > MAX_AGE_MS:
+        return None, "waiting"
+    name = unity_key_name(binding.get("unity_code"))
+    try:
+        return normalize_nexus_key(name), "detected"
+    except ValueError:
+        return None, "unsupported"
 
 
 def save_config(path: Path, config: RuntimeConfig) -> Path | None:
@@ -371,7 +404,10 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         module_hash = verify_module_hash(module_path, config.gameassembly_sha256)
         agent_path = resource_path("autonexus_agent.js")
         source_bytes = agent_path.read_bytes()
-        source = source_bytes.decode("utf-8")
+        source_files = [resource_path(name) for name in (
+            "game_bindings_agent.js", "autoaim_agent.js", "autonexus_agent.js")]
+        sources = [(path, path.read_bytes()) for path in source_files]
+        source = "\n".join(content.decode("utf-8") for _, content in sources)
         analysis = ROOT / "analysis"
         analysis.mkdir(exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -386,7 +422,11 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         script_load_attempted = True
         script.load()
         check_stop()
-        start = script.exports_sync.start({"prediction_enabled": config.prediction_enabled})
+        aim_options = autoaim_mapping(config.autoaim)
+        aim_options["active"] = active and config.autoaim.enabled
+        start = script.exports_sync.start({"prediction_enabled": config.prediction_enabled,
+                                           "detect_game_keys": config.detect_game_keys,
+                                           "autoaim": aim_options})
         verify_start(start, pid, module_path)
         identity.assert_alive()
         check_stop()
@@ -404,8 +444,12 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                process_creation_filetime=identity.created_filetime,
                use_state_filters=config.use_state_filters, bindings=start.get("bindings"),
                prediction_enabled=config.prediction_enabled,
+               autoaim=aim_options, detect_game_keys=config.detect_game_keys,
                prediction_scope="accepted_local_projectile_hits",
-               agent_path=str(agent_path), agent_sha256=hashlib.sha256(source_bytes).hexdigest())
+               agent_path=str(agent_path), agent_sha256=hashlib.sha256(source_bytes).hexdigest(),
+               agent_sources=[{"path": str(path), "sha256": hashlib.sha256(content).hexdigest()}
+                              for path, content in sources],
+               injected_source_sha256=hashlib.sha256(source.encode("utf-8")).hexdigest())
         consumer = TelemetryConsumer(controller, prediction_enabled=config.prediction_enabled)
         input_backend = Win32InputBackend()
         actuator = WindowsNexus(backend=input_backend) if active else None
@@ -419,6 +463,10 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
             identity.assert_alive()
             payload = script.exports_sync.poll()
             check_stop()
+            resolved_key, binding_status = resolve_game_nexus_key(payload, config)
+            # Keep collecting damage/health while waiting for the canonical
+            # binding; do not consume a map's one-shot request with a guessed key.
+            controller.engine.enabled = resolved_key is not None
             # Preserve every event batch, including a rejected/lost one. Decision
             # output is rate-limited independently and cannot be its only log.
             if isinstance(payload, dict) and (payload.get("events") or payload.get("events_lost")):
@@ -444,13 +492,16 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                     identity.assert_alive()
                     check_stop()
                     delivery = deliver(decision, active=active, pid=pid,
-                                       key=config.nexus_key, actuator=actuator)
+                                       key=resolved_key, actuator=actuator)
                 fields = dict(status=sample.status, sequence=sample.sequence, age_ms=sample.age_ms,
                               map_id=current_map, map_name=None if sample.frame is None else sample.frame.map_name,
                               frame=None if sample.frame is None else asdict(sample.frame),
                               use_state_filters=config.use_state_filters,
                               prediction=consumer.prediction.state(),
                               diagnostics=payload.get("diagnostics") if isinstance(payload, dict) else None,
+                              autoaim=payload.get("autoaim") if isinstance(payload, dict) else None,
+                              game_bindings=payload.get("game_bindings") if isinstance(payload, dict) else None,
+                              nexus_binding_status=binding_status,
                               decision=_decision_record(decision), delivery=delivery)
                 if requested or map_changed or now >= next_telemetry:
                     try:

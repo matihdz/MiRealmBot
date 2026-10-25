@@ -1,0 +1,4 @@
+# Preserve the upstream OpenSSL notices byte for byte, including line endings.
+packaging/licenses/OpenSSL-3.0.16-* -text
+# The upstream Authors heading uses seven '=' characters, not a merge marker.
+packaging/licenses/OpenSSL-3.0.16-AUTHORS.md conflict-marker-size=32
