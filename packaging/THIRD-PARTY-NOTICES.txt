@@ -1,0 +1,32 @@
+MiRealmBot: componentes de terceros
+=================================
+
+La carpeta licenses contiene textos originales de las dependencias utilizadas.
+No contiene las condiciones de uso ni archivos del juego.
+
+Componentes de la aplicación portátil:
+
+- CPython: intérprete y biblioteca estándar. Python-LICENSE.txt conserva el
+  acuerdo PSF y las licencias adicionales incluidas por la distribución de
+  Python, entre ellas las de su código distribuible de Microsoft.
+  https://www.python.org/
+- Frida 17.24.3: wxWindows Library Licence 3.1, con su excepción para código
+  objeto. Frida-COPYING.txt es la copia incluida en el paquete instalado;
+  LGPL-2.0.txt conserva también el texto al que remite esa licencia.
+  https://frida.re/  https://github.com/frida/frida
+- Tcl/Tk: las licencias están en Tcl-8.6.15.txt y Tk-license.terms.
+  El texto de Tcl procede de la etiqueta oficial core-8-6-15:
+  https://github.com/tcltk/tcl/blob/core-8-6-15/license.terms
+  El de Tk se copia de la instalación de Python usada para construir.
+  https://www.tcl-lang.org/
+- Bootloader y cargadores PyInstaller 6.22.3: GPL, con la excepción de
+  distribución del bootloader. Ver PyInstaller-COPYING.txt.
+  https://pyinstaller.org/
+
+Se conservan además las licencias disponibles de las herramientas de
+construcción fijadas en requirements-build.txt. Su presencia no significa que
+todos esos paquetes se ejecuten o se incluyan como módulos en la aplicación.
+Las versiones exactas y los hashes del contenido se encuentran en
+BUILD-MANIFEST.json. No se han modificado las dependencias de terceros.
+
+Texto LGPL 2.0: https://www.gnu.org/licenses/old-licenses/lgpl-2.0.txt

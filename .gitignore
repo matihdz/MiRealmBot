@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+analysis/
+build/
+dist/
+autonexus.json
+portable-self-test.json
+*.pyc
+*.log
+*.tmp
+*.bak
+rea-ghidra.cmd
+LEEME-GHIDRA.md
+probe_health.py
+probe_health.js
+il2cpp_probe.js
+Diagnosticar juego.bat

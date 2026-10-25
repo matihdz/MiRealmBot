@@ -1,0 +1,26 @@
+MiRealmBot - Inicio rápido
+
+1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
+2. Abre MiRealmBot.exe en la carpeta extraída.
+3. Abre RotMG Exalt con el launcher oficial y deja el personaje en Nexus.
+4. En MiRealmBot entra en "Juego en vivo".
+5. Elige la MISMA tecla que tienes configurada en el juego para volver al Nexus.
+   CTRL = Control izquierdo. También puedes elegir R u otra tecla admitida.
+6. Para comprobar las lecturas, selecciona "Observar" e "Iniciar observación".
+7. Cuando veas tu vida y mapa, pulsa "Detener".
+8. Ajusta el porcentaje y la predicción. Para empezar a probar, el paquete trae 90 %.
+9. Selecciona "Activo" y pulsa "Iniciar AutoNexus activo".
+10. Vuelve a la ventana del juego y mantenla en primer plano mientras juegas.
+
+IMPORTANTE PARA USARLO
+- Abrir el programa no inicia la protección. Debes pulsar Iniciar en modo Activo.
+- "Observar" y la reproducción del registro no envían teclas.
+- Conserva la carpeta _internal junto al ejecutable.
+- No necesitas instalar Python, Frida, Ghidra ni REA.
+- Primera entrega: Windows de 64 bits e instalación del launcher oficial.
+- Si cambió la versión del juego y el perfil no coincide, necesitas una actualización.
+- La predicción implementada cubre proyectiles; no cubre todos los daños del juego.
+- Pulsa Detener para cerrar la sesión o cambiar parámetros.
+
+Guía completa: docs/USO.md
+Última versión: https://github.com/matihdz/MiRealmBot/releases/latest
