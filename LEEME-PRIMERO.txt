@@ -1,28 +1,35 @@
-MiRealmBot 0.3.1 - Inicio rápido
+MiRealmBot 0.4.0 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
 3. Abre RotMG Exalt con el launcher oficial y deja el personaje en Nexus.
-4. En AutoNexus ajusta porcentaje y predicción. El paquete comienza en 90 %.
+4. En AutoNexus marca "Activar AutoNexus" si quieres usarlo y ajusta
+   porcentaje y predicción. El paquete comienza en 90 %.
 5. Deja marcada "Leer teclas del juego" para detectar la tecla Nexus.
    Se confirma dentro del juego al iniciar la sesión. Si no se reconoce,
    detén la sesión, desmarca esa opción y elige la MISMA tecla manualmente.
-   CTRL = Control izquierdo. Pulsa "Guardar configuración".
-6. Si quieres usar AutoAim, configúralo en su pestaña y guarda.
+   CTRL = Control izquierdo.
+6. Configura AutoAim o Debuffs si quieres usarlos. Los cambios válidos
+   se guardan automáticamente y se aplican con el bot funcionando.
 7. En "Juego en vivo", pulsa "Iniciar bot" para activar los módulos.
 8. Vuelve al juego y mantenlo en primer plano.
 
 LAS PESTAÑAS
 - Juego en vivo: iniciar/detener y estado del bot.
-- AutoNexus: porcentaje, predicción y tecla Nexus.
+- AutoNexus: activación, porcentaje, predicción y tecla Nexus.
 - AutoAim: sus opciones de apuntado y tecla de autofire detectada.
+- Debuffs: protección frente a efectos de estado, con opciones por efecto.
 - Actualizaciones: buscar, descargar e instalar versiones nuevas.
-- Guardar configuración no inicia el bot. Para cambiar ajustes durante
-  una sesión, detén, cambia, guarda y vuelve a iniciar en Juego en vivo.
+- Los cambios se guardan solos tras una pausa breve al editar. El estado
+  muestra cuándo se guardaron y cuándo el motor los aplicó.
+- Un número incompleto o inválido conserva la última configuración válida.
+- Cambiar ajustes no inicia una sesión que estaba detenida.
 - Se retiraron la reproducción de registros y la barra lateral.
+- Cada módulo se activa por separado. Para usar sólo AutoAim, desmarca
+  "Activar AutoNexus". Si todos están apagados no se puede iniciar el bot.
 
 AUTOAIM OPCIONAL
-- Marca "Activar AutoAim" con la sesión detenida y guarda.
+- Marca "Activar AutoAim"; se guarda y aplica automáticamente.
 - Close to Mouse elige un enemigo cercano al cursor.
 - Para empezar, deja Extrapolation en 302 y Radio junto al cursor en 4.
 - Priorizar bosses: prefiere al boss marcado por el juego dentro del radio.
@@ -34,6 +41,22 @@ AUTOAIM OPCIONAL
 - No necesitas mantener otra tecla pulsada. Actúa con autofire encendido
   y el juego sin pausa. No mueve el cursor ni inicia ataques por sí mismo.
 - Extrapolation 0 usa la posición actual; valores mayores adelantan más.
+
+DEBUFFS
+- Marca "Activar módulo Debuffs" y "Confuse" para proteger los controles
+  del jugador local en la ruta de movimiento verificada.
+- Quiet está deshabilitado: no se verificó una forma de evitar sus efectos
+  sobre maná y habilidades. Esta versión no recupera MP ni bloquea Quiet.
+- AntiConfuse tiene análisis estático y pruebas simuladas; falta probarlo
+  con el efecto real en el juego.
+
+CONFIGURACIÓN
+- El archivo es mirealmbot.json. El primer inicio copia los ajustes antiguos
+  de autonexus.json si aún no existe el nuevo, preservando original y copia.
+- mirealmbot.json.bak conserva una configuración anterior sin acumular
+  un archivo por cada cambio.
+- Apagar todos los módulos detiene el bot. Para volver a usarlo activa
+  alguno y pulsa "Iniciar bot".
 
 REGISTROS RECIENTES
 - Los logs del bot se reutilizan: tres archivos de hasta 1 MiB cada uno,

@@ -10,7 +10,7 @@ from unittest import mock
 
 from autonexus_controller import Controller, HealthFrame
 from autonexus_core import Action, AutoNexus, Decision
-from live_autonexus import (MAX_AGE_MS, SUPPORTED_GAMEASSEMBLY_SHA256,
+from bot_runtime import (MAX_AGE_MS, SUPPORTED_GAMEASSEMBLY_SHA256,
                             TelemetryConsumer, cleanup_runtime, deliver,
                             load_config, main, parse_poll, verify_module_hash,
                             verify_start, _console_health)
@@ -37,7 +37,7 @@ class FakeActuator:
         return NexusRequestResult(pid, key)
 
 
-class LiveAutoNexusTests(unittest.TestCase):
+class BotRuntimeTests(unittest.TestCase):
     def test_parse_freshness_boundaries_and_no_invented_observations(self):
         fresh = parse_poll(payload(age_ms=MAX_AGE_MS), -1)
         self.assertEqual(fresh.status, "fresh")
@@ -191,6 +191,27 @@ class LiveAutoNexusTests(unittest.TestCase):
             main(["--help"])
         self.assertEqual(caught.exception.code, 0)
 
+    def test_cli_migrates_only_when_the_default_config_is_selected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selected.json"
+            path.write_text('{"autonexus_enabled": false, "autoaim": {"enabled": true}}',
+                            encoding="utf-8")
+            with mock.patch("bot_runtime.ensure_default_config", return_value=path) as migrate, \
+                    mock.patch("bot_runtime.run_runtime", return_value=0) as run, \
+                    mock.patch("bot_runtime.sys.platform", "win32"):
+                self.assertEqual(main(["--config", str(path), "--active"]), 0)
+                migrate.assert_not_called()
+                self.assertIs(run.call_args.args[0].autonexus_enabled, False)
+                self.assertIs(run.call_args.kwargs["active"], True)
+                self.assertEqual(main([]), 0)
+                migrate.assert_called_once_with()
+            with mock.patch("bot_runtime.ensure_default_config") as migrate, \
+                    mock.patch("bot_runtime.run_runtime") as run, \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["--config", str(path.with_name("missing.json"))])
+            migrate.assert_not_called()
+            run.assert_not_called()
+
     def test_runtime_rejects_non_boolean_state_policy_and_retains_console_partial_hp(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "autonexus.json"
@@ -226,7 +247,8 @@ class LiveAutoNexusTests(unittest.TestCase):
             module_path.write_bytes(b"fake module")
             expected_exe = root / "RotMG Exalt.exe"
             expected_exe.write_bytes(b"fake exe")
-            (root / "autonexus_agent.js").write_text("// fake script; never evaluated", encoding="utf-8")
+            for name in ("bot_agent.js", "game_bindings_agent.js", "autoaim_agent.js", "debuffs_agent.js"):
+                (root / name).write_text("// fake script; never evaluated", encoding="utf-8")
             calls = []
 
             class FakeIdentity:
@@ -297,13 +319,14 @@ class LiveAutoNexusTests(unittest.TestCase):
             output = io.StringIO()
             fake_frida = SimpleNamespace(get_local_device=lambda: FakeDevice())
             with mock.patch.dict("sys.modules", {"frida": fake_frida}), \
-                    mock.patch("live_autonexus.sys.platform", "win32"), \
-                    mock.patch("live_autonexus.ROOT", root), \
-                    mock.patch("live_autonexus.EXPECTED_EXE", expected_exe), \
-                    mock.patch("live_autonexus.ProcessIdentity", FakeIdentity), \
-                    mock.patch("live_autonexus.verify_module_hash", return_value=SUPPORTED_GAMEASSEMBLY_SHA256), \
-                    mock.patch("live_autonexus.WindowsNexus") as actuator, \
-                    mock.patch("live_autonexus.time.sleep", side_effect=[None, KeyboardInterrupt]), \
+                    mock.patch("bot_runtime.sys.platform", "win32"), \
+                    mock.patch("bot_runtime.ROOT", root), \
+                    mock.patch("bot_runtime.resource_path", side_effect=lambda name: root / name), \
+                    mock.patch("bot_runtime.EXPECTED_EXE", expected_exe), \
+                    mock.patch("bot_runtime.ProcessIdentity", FakeIdentity), \
+                    mock.patch("bot_runtime.verify_module_hash", return_value=SUPPORTED_GAMEASSEMBLY_SHA256), \
+                    mock.patch("bot_runtime.WindowsNexus") as actuator, \
+                    mock.patch("bot_runtime.time.sleep", side_effect=[None, KeyboardInterrupt]), \
                     contextlib.redirect_stdout(output):
                 self.assertEqual(main(["--config", str(config), "--duration", "1"]), 130)
                 actuator.assert_not_called()

@@ -36,6 +36,20 @@ class AutoNexusTests(unittest.TestCase):
         self.assertEqual(tiny.evaluate().limit, 0)
         self.assertEqual(tiny.evaluate().action, Action.NONE)
 
+    def test_live_threshold_changes_validate_and_preserve_this_maps_request(self):
+        engine = self.ready(threshold=0.3, player_hp=250)
+        self.assertEqual(engine.evaluate().action, Action.ESCAPE)
+        engine.threshold = 0.8
+        self.assertEqual(engine.evaluate().action, Action.NONE)
+        previous = engine.threshold
+        with self.assertRaises(ValueError):
+            engine.threshold = 1.0
+        self.assertEqual(engine.threshold, previous)
+        engine.new_map()
+        engine.set_gates(False, False)
+        engine.update_health(250, 1000)
+        self.assertEqual(engine.evaluate().action, Action.ESCAPE)
+
     def test_either_health_source_can_trigger(self):
         for player_hp, tracked_hp in ((900, 299), (299, 900)):
             with self.subTest(player_hp=player_hp, tracked_hp=tracked_hp):

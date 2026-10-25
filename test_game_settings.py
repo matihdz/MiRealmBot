@@ -2,7 +2,7 @@ import unittest
 
 from game_settings import parse_game_bindings, unity_key_name
 from autoaim_settings import parse_autoaim
-from live_autonexus import config_from_mapping, config_to_mapping, resolve_game_nexus_key
+from bot_runtime import config_from_mapping, config_to_mapping, resolve_game_nexus_key
 
 
 class BindingTests(unittest.TestCase):

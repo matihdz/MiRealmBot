@@ -12,8 +12,9 @@ import unittest
 from unittest.mock import patch
 
 from client_ui import App, RuntimeInbox
+from debuffs_settings import QUIET_SUPPORTED, QUIET_UNSUPPORTED_REASON
 from game_settings import GameBinding
-from live_autonexus import SUPPORTED_GAMEASSEMBLY_SHA256
+from bot_runtime import SUPPORTED_GAMEASSEMBLY_SHA256, config_to_mapping
 
 
 def descendants(widget):
@@ -55,7 +56,7 @@ class ClientTests(unittest.TestCase):
         self.root.withdraw()
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.config_path = Path(self.directory.name) / "autonexus.json"
+        self.config_path = Path(self.directory.name) / "mirealmbot.json"
         self.initial_config = json.dumps({"threshold": .3, "prediction_enabled": False,
             "use_state_filters": False, "nexus_key": "CTRL", "excluded_maps": ["Nexus"],
             "gameassembly_sha256": SUPPORTED_GAMEASSEMBLY_SHA256, "extra_user_setting": "preservar"})
@@ -65,17 +66,33 @@ class ClientTests(unittest.TestCase):
         self.release_cleanup = threading.Event()
         self.cleanup_started = threading.Event()
         self.extra_release_events = []
+        self.requests = []
+        self.allow_apply = threading.Event()
+        self.allow_apply.set()
+        self.worker_ids = []
         self.bindings = {"nexus": GameBinding("nexus", "CTRL", 306, "fixture"),
                          "autofire": GameBinding("autofire", None, None, None, "Sin valor guardado")}
         def settings_reader():
             self.settings_calls += 1
             return self.bindings
-        def runtime(config, *, active, stop_event, on_update):
+        def runtime(config, *, active, stop_event, on_update, control):
             self.calls.append((config, active))
+            self.worker_ids.append(threading.get_ident())
+            on_update({"event": "config_applied", "revision": 0, "configuration": config_to_mapping(config)})
             on_update({"event": "lifecycle", "status": "running"})
             on_update({"event": "telemetry", "frame": {"player_hp": 100, "max_hp": 100, "map_name": "Nexus"},
                        "game_foreground": False, "prediction": {"enabled": config.prediction_enabled, "tracked_hp": 100}})
-            stop_event.wait(3)
+            while not stop_event.wait(.01):
+                request = control.take_latest() if self.allow_apply.is_set() else None
+                if request is not None:
+                    revision, configured = request
+                    self.requests.append(request)
+                    self.worker_ids.append(threading.get_ident())
+                    on_update({"event": "config_applied", "revision": revision,
+                               "configuration": config_to_mapping(configured)})
+                    if not (configured.autonexus_enabled or configured.autoaim.enabled or configured.debuffs.has_protection):
+                        on_update({"event": "stop_requested", "reason": "no_enabled_modules"})
+                        break
             self.cleanup_started.set()
             self.release_cleanup.wait(3)
             on_update({"event": "lifecycle", "status": "finished", "cleanup_complete": True, "code": 0})
@@ -113,9 +130,9 @@ class ClientTests(unittest.TestCase):
         self.app.notebook.select(tab)
         self.root.update()
 
-    def test_opening_is_offline_shows_four_tabs_and_keeps_root_withdrawn(self):
+    def test_opening_is_offline_shows_five_tabs_and_keeps_root_withdrawn(self):
         self.assertEqual([self.app.notebook.tab(tab, "text") for tab in self.app.notebook.tabs()],
-                         ["Juego en vivo", "AutoNexus", "AutoAim", "Actualizaciones"])
+                         ["Juego en vivo", "AutoNexus", "AutoAim", "Debuffs", "Actualizaciones"])
         self.assertEqual(self.app.notebook.select(), str(self.app.live_tab))
         self.assertEqual(self.root.state(), "withdrawn")
         self.assertIsNone(self.app.runtime_thread)
@@ -139,19 +156,18 @@ class ClientTests(unittest.TestCase):
         buttons = [widget for widget in descendants(self.root) if isinstance(widget, ttk.Button)]
         runtime_buttons = [widget for widget in buttons if widget.cget("text").startswith(("Iniciar", "Detener"))]
         self.assertEqual(set(runtime_buttons), {self.app.start_button, self.app.stop_button})
-        saves = [widget for widget in buttons if widget.cget("text") == "Guardar configuración"]
-        self.assertEqual(len(saves), 2)
-        self.assertTrue(any(belongs_to(widget, self.app.nexus_tab) for widget in saves))
-        self.assertTrue(any(belongs_to(widget, self.app.aim_tab) for widget in saves))
+        self.assertFalse(any("Guardar" in widget.cget("text") for widget in buttons))
         self.assertTrue(belongs_to(self.app.detect_keys_check, self.app.nexus_tab))
         self.assertTrue(belongs_to(self.app.prioritize_bosses_check, self.app.aim_tab))
+        self.assertTrue(belongs_to(self.app.nexus_enabled_check, self.app.nexus_tab))
+        self.assertTrue(belongs_to(self.app.quiet_check, self.app.debuffs_tab))
 
     def test_navigation_uses_one_draft_and_never_starts_runtime_from_config_or_updates(self):
         draft = self.app.draft
         draft.threshold.set("70")
         draft.aim_enabled.set(True)
         draft.extrapolation.set("120")
-        for tab in (self.app.nexus_tab, self.app.aim_tab, self.app.updates_panel):
+        for tab in (self.app.nexus_tab, self.app.aim_tab, self.app.debuffs_tab, self.app.updates_panel):
             self.select(tab)
             self.assertFalse(self.app.start_live())
             self.assertEqual(draft.validate().threshold, .7)
@@ -165,13 +181,13 @@ class ClientTests(unittest.TestCase):
         draft = self.app.draft
         draft.extrapolation.set("nan")
         with patch("client_ui.messagebox.showerror"):
-            self.assertFalse(self.app.save_parameters())
+            self.assertFalse(self.app.flush_configuration())
         self.assertEqual(self.config_path.read_text(encoding="utf-8"), self.initial_config)
         draft.extrapolation.set("12,5")
         draft.threshold.set("40")
         draft.aim_enabled.set(True)
         draft.prioritize_bosses.set(True)
-        self.assertTrue(self.app.save_parameters())
+        self.assertTrue(self.app.flush_configuration())
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["threshold"], .4)
         self.assertEqual(saved["extra_user_setting"], "preservar")
@@ -181,12 +197,16 @@ class ClientTests(unittest.TestCase):
         self.select(self.app.aim_tab)
         draft.threshold.set("no")
         with patch("client_ui.messagebox.showerror"):
-            self.assertFalse(self.app.save_parameters())
+            self.assertFalse(self.app.flush_configuration())
         self.assertEqual(self.calls, [])
 
     def test_config_defaults_and_independent_filters_are_saved_and_restored(self):
         draft = self.app.draft
+        self.assertTrue(draft.nexus_enabled.get())
         self.assertFalse(draft.aim_enabled.get())
+        self.assertFalse(draft.debuffs_enabled.get())
+        self.assertTrue(draft.confuse.get())
+        self.assertFalse(draft.quiet.get())
         self.assertFalse(draft.prioritize_bosses.get())
         self.assertFalse(draft.ignore_walls.get())
         self.assertEqual(draft.extrapolation.get(), "302")
@@ -196,7 +216,7 @@ class ClientTests(unittest.TestCase):
             with self.subTest(bosses=bosses, walls=walls):
                 draft.prioritize_bosses.set(bosses)
                 draft.ignore_walls.set(walls)
-                self.assertTrue(self.app.save_parameters())
+                self.assertTrue(self.app.flush_configuration())
                 window = tk.Toplevel(self.root)
                 window.withdraw()
                 restored = App(window, config_path=self.config_path, settings_reader=lambda: self.bindings)
@@ -205,6 +225,135 @@ class ClientTests(unittest.TestCase):
                     self.assertIs(restored.draft.ignore_walls.get(), walls)
                 finally:
                     restored.close()
+        self.assertEqual(self.calls, [])
+
+    def test_default_config_migration_is_only_requested_when_no_path_was_selected(self):
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit), patch("client_ui.ensure_default_config", return_value=self.config_path) as ensure:
+                window = tk.Toplevel(self.root)
+                window.withdraw()
+                opened = App(window, config_path=self.config_path if explicit else None,
+                             settings_reader=lambda: self.bindings)
+                try:
+                    self.assertEqual(opened.config_path, self.config_path)
+                    ensure.assert_not_called() if explicit else ensure.assert_called_once_with()
+                finally:
+                    opened.close()
+
+    def test_disabled_modules_can_be_saved_but_cannot_start_any_worker(self):
+        draft = self.app.draft
+        draft.nexus_enabled.set(False)
+        draft.aim_enabled.set(False)
+        draft.debuffs_enabled.set(False)
+        self.assertEqual(str(self.app.start_button.cget("state")), "disabled")
+        self.assertIn("Activa al menos un módulo", self.app.live_hint_var.get())
+        self.assertFalse(self.app.start_live())
+        self.assertEqual(self.calls, [])
+        self.select(self.app.debuffs_tab)
+        self.assertTrue(self.app.flush_configuration())
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertFalse(saved["autonexus_enabled"])
+        self.assertFalse(saved["autoaim"]["enabled"])
+        self.assertFalse(saved["debuffs"]["enabled"])
+        self.assertEqual(saved["extra_user_setting"], "preservar")
+
+    def test_each_module_can_start_independently_from_the_other_two(self):
+        draft = self.app.draft
+        for selected in ("nexus_enabled", "aim_enabled", "debuffs_enabled"):
+            with self.subTest(module=selected):
+                draft.nexus_enabled.set(selected == "nexus_enabled")
+                draft.aim_enabled.set(selected == "aim_enabled")
+                draft.debuffs_enabled.set(selected == "debuffs_enabled")
+                self.assertEqual(str(self.app.start_button.cget("state")), "normal")
+                self.assertTrue(self.app.start_live())
+                self.pump_until(lambda: self.app.status_var.get() == "Activo")
+                config, active = self.calls[-1]
+                self.assertTrue(active)
+                self.assertEqual(config.autonexus_enabled, selected == "nexus_enabled")
+                self.assertEqual(config.autoaim.enabled, selected == "aim_enabled")
+                self.assertEqual(config.debuffs.enabled, selected == "debuffs_enabled")
+                self.assertEqual(str(self.app.threshold_input.cget("state")), "normal")
+                self.app.stop_live()
+                self.release_cleanup.set()
+                self.pump_until(lambda: self.app.runtime_thread is None)
+
+    def test_debuff_choices_are_saved_loaded_and_do_not_change_aim_or_nexus(self):
+        self.select(self.app.debuffs_tab)
+        draft = self.app.draft
+        draft.nexus_enabled.set(False)
+        draft.aim_enabled.set(True)
+        draft.debuffs_enabled.set(True)
+        draft.confuse.set(False)
+        draft.quiet.set(False)
+        self.assertTrue(self.app.flush_configuration())
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        restored = App(window, config_path=self.config_path, settings_reader=lambda: self.bindings)
+        try:
+            config = restored.draft.validate()
+            self.assertFalse(config.autonexus_enabled)
+            self.assertTrue(config.autoaim.enabled)
+            self.assertTrue(config.debuffs.enabled)
+            self.assertFalse(config.debuffs.confuse)
+            self.assertFalse(config.debuffs.quiet)
+        finally:
+            restored.close()
+
+    def test_aim_only_session_ignores_nexus_binding_wait_and_unsupported_status(self):
+        draft = self.app.draft
+        draft.nexus_enabled.set(False)
+        draft.aim_enabled.set(True)
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        for binding_status in ("waiting", "unsupported", "disabled"):
+            with self.subTest(binding_status=binding_status):
+                self.app._handle_runtime_record({"event": "telemetry", "nexus_binding_status": binding_status,
+                    "decision": {"action": "escape", "reason": "health is below the limit"},
+                    "game_bindings": {"nexus": {"unity_code": 308, "age_ms": 2}}})
+                self.assertEqual(self.app.live_vars["decision"].get(), "AutoNexus desactivado")
+                self.assertNotIn("PUEDE ENVIAR", self.app.banner_var.get())
+                self.assertNotIn("ESPERA", self.app.banner_var.get())
+                self.assertNotIn("NO ADMITIDA", self.app.banner_var.get())
+                self.assertNotIn("pendiente", self.app.live_vars["applied"].get())
+                self.assertNotIn("tecla Nexus", self.app.live_hint_var.get())
+                self.assertIn("AutoAim sí", self.app.live_vars["applied"].get())
+
+    def test_debuff_telemetry_keeps_unknown_state_and_error_visible(self):
+        self.app._handle_runtime_record({"event": "telemetry", "debuffs": {
+            "enabled": True, "active": None, "confuse": True, "quiet": False,
+            "quiet_supported": False, "quiet_reason": QUIET_UNSUPPORTED_REASON,
+            "checks": 8, "blocked": 2, "error": "Fixture pendiente"}})
+        self.assertIn("Estado sin confirmar", self.app.live_vars["debuffs"].get())
+        self.assertIn("Confuse sí", self.app.live_vars["debuffs"].get())
+        self.assertIn("Quiet no disponible", self.app.live_vars["debuffs"].get())
+        self.assertIn("comprobaciones 8", self.app.live_vars["debuffs"].get())
+        self.assertIn("bloqueos 2", self.app.live_vars["debuffs"].get())
+        self.assertIn(QUIET_UNSUPPORTED_REASON, self.app.live_vars["debuffs"].get())
+        self.assertIn("Fixture pendiente", self.app.live_vars["debuffs"].get())
+
+    def test_quiet_is_unavailable_and_does_not_count_as_a_supported_protection(self):
+        draft = self.app.draft
+        self.assertFalse(QUIET_SUPPORTED)
+        self.assertFalse(draft.quiet.get())
+        self.assertEqual(str(self.app.quiet_check.cget("state")), "disabled")
+        self.assertEqual(self.app.quiet_reason_var.get(), QUIET_UNSUPPORTED_REASON)
+        draft.nexus_enabled.set(False)
+        draft.aim_enabled.set(False)
+        draft.debuffs_enabled.set(True)
+        draft.confuse.set(False)
+        self.assertFalse(draft.any_module_enabled())
+        self.assertEqual(str(self.app.start_button.cget("state")), "disabled")
+        self.assertFalse(self.app.start_live())
+        self.assertTrue(self.app.flush_configuration())
+        draft.quiet.set(True)  # Even a programmatic edit cannot enable unsupported behavior.
+        self.assertFalse(draft.any_module_enabled())
+        with self.assertRaisesRegex(ValueError, "AntiQuiet no disponible"):
+            draft.validate()
+        draft.quiet.set(False)
+        draft.confuse.set(True)
+        self.assertTrue(draft.any_module_enabled())
+        self.assertEqual(str(self.app.start_button.cget("state")), "normal")
+        self.assertEqual(str(self.app.quiet_check.cget("state")), "disabled")
         self.assertEqual(self.calls, [])
 
     def test_invalid_parameters_never_start_runtime(self):
@@ -217,7 +366,7 @@ class ClientTests(unittest.TestCase):
                 variable.set(valid)
         self.assertEqual(self.calls, [])
 
-    def test_runtime_gets_immutable_joint_snapshot_and_locks_all_configuration_pages(self):
+    def test_live_edits_replace_acknowledged_snapshot_without_restarting_worker(self):
         draft = self.app.draft
         draft.threshold.set("60")
         draft.aim_enabled.set(True)
@@ -234,12 +383,20 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(config.autoaim.activation, "autofire")
         self.assertEqual(config.autoaim.extrapolation, 150)
         for widget in self.app.config_widgets:
-            self.assertEqual(str(widget.cget("state")), "disabled")
-        self.assertFalse(self.app.save_parameters())
-        draft.threshold.set("10")  # Programmatic edits cannot alter the worker's snapshot.
+            self.assertEqual(str(widget.cget("state")), "disabled" if widget is self.app.quiet_check else "normal")
+        worker = self.app.runtime_thread
+        self.allow_apply.clear()
+        draft.threshold.set("10")
+        self.assertTrue(self.app.flush_configuration())
         self.assertEqual(config.threshold, .6)
-        self.assertIs(self.app.applied_config, config)
-        self.assertEqual(self.config_path.read_text(encoding="utf-8"), self.initial_config)
+        self.assertEqual(self.app.applied_config, config)
+        self.assertIsNotNone(self.app.pending_revision)
+        self.allow_apply.set()
+        self.pump_until(lambda: self.app.applied_config.threshold == .1)
+        self.assertIs(self.app.runtime_thread, worker)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(all(identity != threading.get_ident() for identity in self.worker_ids))
+        self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8"))["threshold"], .1)
 
     def test_applied_status_stays_visible_while_visiting_configuration_tabs(self):
         self.app.draft.detect_game_keys.set(False)
@@ -266,7 +423,7 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(self.app.cleanup_complete)
 
     def test_cleanup_failure_keeps_error_and_blocks_restart_and_install(self):
-        def incomplete(config, *, active, stop_event, on_update):
+        def incomplete(config, *, active, stop_event, on_update, control):
             on_update({"event": "lifecycle", "status": "finished", "code": 1,
                        "cleanup_complete": False, "errors": ["No se confirmó detach"]})
             return 1
@@ -362,9 +519,9 @@ class ClientTests(unittest.TestCase):
         self.assertIn("dentro del juego", self.app.nexus_binding_var.get())
         self.assertTrue(self.app.draft.detect_game_keys.get())
 
-    def test_fresh_runtime_bindings_update_applied_key_but_never_edit_locked_draft(self):
+    def test_fresh_runtime_bindings_update_applied_key_but_never_edit_manual_draft(self):
         self.assertTrue(self.app.start_live())
-        self.pump_until(lambda: len(self.calls) == 1)
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
         record = {"event": "telemetry", "nexus_binding_status": "waiting"}
         self.app._handle_runtime_record(record)
         self.assertEqual(self.app.live_vars["decision"].get(), "Esperando tecla Nexus del juego")
@@ -385,6 +542,128 @@ class ClientTests(unittest.TestCase):
         self.app._handle_runtime_record(record)
         self.assertEqual(self.app.applied_key, "R")
         self.assertIn("sin lectura reciente", self.app.nexus_binding_var.get())
+
+    def test_autosave_debounces_joint_edits_and_keeps_last_valid_file_for_incomplete_input(self):
+        from client_ui import save_config
+        draft = self.app.draft
+        with patch("client_ui.save_config", wraps=save_config) as save, patch("client_ui.messagebox.showerror") as popup:
+            draft.threshold.set("42")
+            draft.prediction_enabled.set(True)
+            draft.extrapolation.set("")
+            self.pump_until(lambda: "Sin guardar" in self.app.draft_status_var.get())
+            save.assert_not_called()
+            popup.assert_not_called()
+            self.assertEqual(self.config_path.read_text(encoding="utf-8"), self.initial_config)
+            draft.extrapolation.set("200")
+            draft.aim_enabled.set(True)
+            self.pump_until(lambda: self.app._autosave_after is None and not self.app._draft_dirty)
+            self.assertEqual(save.call_count, 1)
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["threshold"], .42)
+        self.assertEqual(saved["autoaim"]["extrapolation"], 200)
+        self.assertTrue(saved["autoaim"]["enabled"])
+        self.assertTrue(saved["prediction_enabled"])
+        self.assertEqual(self.calls, [])
+
+    def test_reading_automatic_key_preferences_does_not_change_or_save_manual_draft(self):
+        self.bindings["nexus"] = GameBinding("nexus", "R", 114, "fixture")
+        self.app.refresh_game_bindings()
+        self.assertIn("Nexus: R", self.app.nexus_binding_var.get())
+        self.assertEqual(self.app.draft.nexus_key.get(), "CTRL")
+        self.assertIsNone(self.app._autosave_after)
+        self.assertFalse(self.app._draft_dirty)
+        self.assertEqual(self.config_path.read_text(encoding="utf-8"), self.initial_config)
+
+    def test_pending_live_revisions_coalesce_and_old_acknowledgements_cannot_clear_newer_work(self):
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        self.allow_apply.clear()
+        self.app.draft.threshold.set("40")
+        first = self.app.flush_configuration()
+        first_revision = self.app.pending_revision
+        self.app.draft.threshold.set("50")
+        second = self.app.flush_configuration()
+        second_revision = self.app.pending_revision
+        self.assertGreater(second_revision, first_revision)
+        self.app._handle_runtime_record({"event": "config_applied", "revision": first_revision,
+                                        "configuration": config_to_mapping(first)})
+        self.assertEqual(self.app.applied_config.threshold, .4)
+        self.assertEqual(self.app.pending_revision, second_revision)
+        self.assertIn("pendiente", self.app.draft_status_var.get())
+        self.app._handle_runtime_record({"event": "config_applied", "revision": 0,
+                                        "configuration": config_to_mapping(self.calls[0][0])})
+        self.assertEqual(self.app.applied_config.threshold, .4)
+        self.allow_apply.set()
+        self.pump_until(lambda: self.app.pending_revision is None)
+        self.assertEqual(self.requests, [(second_revision, second)])
+        self.assertEqual(self.app.applied_config.threshold, .5)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_all_modules_off_is_applied_then_stops_and_reenabling_does_not_autostart(self):
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        self.release_cleanup.set()
+        self.app.draft.nexus_enabled.set(False)
+        self.assertTrue(self.app.flush_configuration())
+        self.pump_until(lambda: self.app.runtime_thread is None)
+        self.assertFalse(self.app.applied_config.autonexus_enabled)
+        self.assertTrue(self.app.cleanup_complete)
+        self.app.draft.aim_enabled.set(True)
+        self.assertTrue(self.app.flush_configuration())
+        self.assertIsNone(self.app.runtime_thread)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: len(self.calls) == 2)
+
+    def test_start_flushes_current_draft_and_cancels_its_delayed_save(self):
+        self.app.draft.threshold.set("63")
+        self.assertIsNotNone(self.app._autosave_after)
+        self.assertTrue(self.app.start_live())
+        self.assertIsNone(self.app._autosave_after)
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        self.assertEqual(self.calls[0][0].threshold, .63)
+        self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8"))["threshold"], .63)
+
+    def test_close_flushes_valid_pending_edits_without_starting_any_worker(self):
+        self.app.draft.threshold.set("67")
+        self.app.close()
+        self.assertIsNone(self.app._autosave_after)
+        self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8"))["threshold"], .67)
+        self.assertEqual(self.calls, [])
+
+    def test_close_with_incomplete_input_keeps_previous_valid_file(self):
+        self.app.draft.threshold.set("65")
+        self.app.flush_configuration()
+        valid = self.config_path.read_bytes()
+        self.app.draft.threshold.set("")
+        with patch("client_ui.messagebox.showerror") as popup:
+            self.app.close()
+            popup.assert_not_called()
+        self.assertEqual(self.config_path.read_bytes(), valid)
+
+    def test_save_permission_error_never_submits_unpersisted_live_configuration(self):
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        old = self.app.applied_config
+        self.app.draft.threshold.set("45")
+        with patch("client_ui.save_config", side_effect=PermissionError("Archivo ocupado")), patch("client_ui.messagebox.showerror") as popup:
+            self.assertIsNone(self.app.flush_configuration())
+            popup.assert_not_called()
+        self.assertEqual(self.app.applied_config, old)
+        self.assertIsNone(self.app.pending_revision)
+        self.assertEqual(self.requests, [])
+        self.assertIn("Archivo ocupado", self.app.draft_status_var.get())
+        self.assertIsNotNone(self.app.runtime_thread)
+
+    def test_failed_live_config_ack_clears_claimed_state_and_requests_cleanup(self):
+        self.assertTrue(self.app.start_live())
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
+        self.app._handle_runtime_record({"event": "config_error", "revision": 1,
+                                        "reason": "configure_failed", "error": "No hubo confirmación"})
+        self.assertIsNone(self.app.applied_config)
+        self.assertTrue(self.app.stop_event.is_set())
+        self.assertIn("sin confirmar", self.app.live_vars["applied"].get())
+        self.assertIn("SIN CONFIRMAR", self.app.banner_var.get())
 
     def test_autoaim_telemetry_preserves_unknown_autofire_and_boss_identity(self):
         for boss, expected in ((True, "Boss"), (False, "Enemigo"), (None, "Tipo sin confirmar"), (1, "Tipo sin confirmar")):

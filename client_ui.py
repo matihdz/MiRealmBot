@@ -14,12 +14,14 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from app_paths import APP_ROOT
+from app_paths import ensure_default_config
 from app_version import VERSION
 from autonexus_core import AutoNexus
 from client_updates import UpdatePanel
+from debuffs_settings import DebuffSettings, QUIET_SUPPORTED, QUIET_UNSUPPORTED_REASON
 from game_settings import read_game_bindings, unity_key_name
-from live_autonexus import config_from_mapping, load_config, run_runtime, save_config
+from bot_runtime import config_from_mapping, load_config, run_runtime, save_config
+from runtime_control import RuntimeControl
 from update_core import launch_update
 from windows_nexus import normalize_nexus_key
 
@@ -62,6 +64,7 @@ class ConfigDraft:
         self._fixed = {"excluded_maps": list(config.excluded_maps),
                        "gameassembly_sha256": config.gameassembly_sha256,
                        "use_state_filters": config.use_state_filters}
+        self.nexus_enabled = tk.BooleanVar(master, config.autonexus_enabled)
         self.threshold = tk.StringVar(master, f"{config.threshold * 100:g}")
         self.prediction_enabled = tk.BooleanVar(master, config.prediction_enabled)
         self.nexus_key = tk.StringVar(master, config.nexus_key)
@@ -71,11 +74,20 @@ class ConfigDraft:
         self.mouse_radius = tk.StringVar(master, f"{config.autoaim.mouse_radius:g}")
         self.prioritize_bosses = tk.BooleanVar(master, config.autoaim.prioritize_bosses)
         self.ignore_walls = tk.BooleanVar(master, config.autoaim.ignore_walls)
+        self.debuffs_enabled = tk.BooleanVar(master, config.debuffs.enabled)
+        self.confuse = tk.BooleanVar(master, config.debuffs.confuse)
+        self.quiet = tk.BooleanVar(master, config.debuffs.quiet)
 
     @property
     def variables(self):
-        return (self.threshold, self.prediction_enabled, self.nexus_key, self.detect_game_keys,
-                self.aim_enabled, self.extrapolation, self.mouse_radius, self.prioritize_bosses, self.ignore_walls)
+        return (self.nexus_enabled, self.threshold, self.prediction_enabled, self.nexus_key, self.detect_game_keys,
+                self.aim_enabled, self.extrapolation, self.mouse_radius, self.prioritize_bosses, self.ignore_walls,
+                self.debuffs_enabled, self.confuse, self.quiet)
+
+    def any_module_enabled(self):
+        protections = DebuffSettings(enabled=self.debuffs_enabled.get(),
+                                     confuse=self.confuse.get(), quiet=self.quiet.get())
+        return self.nexus_enabled.get() or self.aim_enabled.get() or protections.has_protection
 
     @staticmethod
     def _number(variable, label):
@@ -91,13 +103,14 @@ class ConfigDraft:
         return value
 
     def validate(self):
-        return config_from_mapping(dict(self._fixed, threshold=self.threshold_percent() / 100,
+        return config_from_mapping(dict(self._fixed, autonexus_enabled=self.nexus_enabled.get(), threshold=self.threshold_percent() / 100,
             prediction_enabled=self.prediction_enabled.get(), nexus_key=self.nexus_key.get(),
             detect_game_keys=self.detect_game_keys.get(), autoaim={
                 "enabled": self.aim_enabled.get(), "mode": "close_to_mouse", "activation": "autofire",
                 "extrapolation": self._number(self.extrapolation, "Extrapolation"),
                 "mouse_radius": self._number(self.mouse_radius, "Radio junto al cursor"),
-                "prioritize_bosses": self.prioritize_bosses.get(), "ignore_walls": self.ignore_walls.get()}))
+                "prioritize_bosses": self.prioritize_bosses.get(), "ignore_walls": self.ignore_walls.get()},
+            debuffs={"enabled": self.debuffs_enabled.get(), "confuse": self.confuse.get(), "quiet": self.quiet.get()}))
 
 
 class RuntimeInbox:
@@ -111,7 +124,8 @@ class RuntimeInbox:
 
     def put(self, record):
         kind = record.get("event")
-        if kind in ("lifecycle", "error", "cleanup", "worker_done", "worker_failure", "logging_warning"):
+        if kind in ("lifecycle", "error", "cleanup", "worker_done", "worker_failure", "logging_warning",
+                    "config_applied", "config_error", "stop_requested"):
             self.critical.put(record)
         else:
             with self.lock:
@@ -143,10 +157,20 @@ class App:
     def __init__(self, root, *, config_path=None, runtime_runner=None, settings_reader=None,
                  auto_check_updates=False, update_service=None, portable_updates=None):
         self.root = root
-        self.config_path = Path(config_path or APP_ROOT / "autonexus.json")
+        self.config_path = ensure_default_config() if config_path is None else Path(config_path)
         self.runtime_runner = runtime_runner or run_runtime
         self.settings_reader = settings_reader or read_game_bindings
-        self.draft = ConfigDraft(root, load_config(self.config_path))
+        initial_config = load_config(self.config_path)
+        self.draft = ConfigDraft(root, initial_config)
+        self._last_saved_config = initial_config
+        self._initializing = True
+        self._autosave_after = None
+        self._draft_dirty = False
+        self.runtime_control = None
+        self.pending_revision = None
+        self._requested_config = None
+        self._applied_revision = -1
+        self._configuration_uncertain = False
         self.runtime_thread = None
         self.stop_event = None
         self.runtime_inbox = RuntimeInbox()
@@ -161,7 +185,7 @@ class App:
         self.status_var = tk.StringVar(root, "Detenido")
         self.banner_var = tk.StringVar(root)
         self.footer_var = tk.StringVar(root, "Abrir MiRealmBot no inicia el bot · Las actualizaciones consultan GitHub")
-        self.draft_status_var = tk.StringVar(root, "Los cambios se aplican al próximo inicio de sesión.")
+        self.draft_status_var = tk.StringVar(root, "Configuración cargada. Los cambios se guardan automáticamente.")
         self.nexus_binding_var = tk.StringVar(root)
         self.autofire_binding_var = tk.StringVar(root)
         self.config_widgets = []
@@ -172,10 +196,11 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_game_bindings()
         self._draft_changed()
+        self._initializing = False
         self._schedule_tick()
 
     def _style(self):
-        self.root.title(f"MiRealmBot {VERSION} · AutoNexus / AutoAim")
+        self.root.title(f"MiRealmBot {VERSION}")
         self.root.geometry("1100x850")
         self.root.minsize(940, 740)
         self.root.configure(bg=BG)
@@ -220,7 +245,7 @@ class App:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         self._label(header, "MiRealmBot", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        self._label(header, "AUTO NEXUS   /   AUTO AIM", style="Muted.TLabel").grid(row=1, column=0, sticky="w")
+        self._label(header, "AUTO NEXUS   /   AUTO AIM   /   DEBUFFS", style="Muted.TLabel").grid(row=1, column=0, sticky="w")
         tk.Label(header, textvariable=self.status_var, background=SURFACE, foreground=TEAL,
                  padx=16, pady=8, font=("Segoe UI Semibold", 10)).grid(row=0, column=1, rowspan=2, sticky="e")
         self.banner = tk.Label(self.root, textvariable=self.banner_var, anchor="w", padx=14, pady=10, font=("Segoe UI Semibold", 10))
@@ -230,11 +255,14 @@ class App:
         self.live_tab = ttk.Frame(self.notebook, padding=20)
         self.nexus_tab = ttk.Frame(self.notebook, padding=24)
         self.aim_tab = ttk.Frame(self.notebook, padding=24)
-        for frame, label in ((self.live_tab, "Juego en vivo"), (self.nexus_tab, "AutoNexus"), (self.aim_tab, "AutoAim")):
+        self.debuffs_tab = ttk.Frame(self.notebook, padding=24)
+        for frame, label in ((self.live_tab, "Juego en vivo"), (self.nexus_tab, "AutoNexus"),
+                             (self.aim_tab, "AutoAim"), (self.debuffs_tab, "Debuffs")):
             self.notebook.add(frame, text=label)
         self._build_live()
         self._build_nexus()
         self._build_autoaim()
+        self._build_debuffs()
         self.updates_panel = UpdatePanel(self.notebook, can_install=self._can_install_update,
             request_install=self._install_update, service=update_service,
             portable=portable_updates, auto_check=auto_check_updates)
@@ -273,6 +301,7 @@ class App:
         self.live_vars = {}
         for row, (key, label, initial) in enumerate((
             ("map", "Mapa", "—"), ("decision", "AutoNexus", "Sin sesión"), ("autoaim", "AutoAim", "Sin sesión"),
+            ("debuffs", "Debuffs", "Sin sesión"),
             ("focus", "Ventana del juego", "Sin comprobar"), ("delivery", "Última salida", "Ninguna"),
             ("applied", "Configuración aplicada", "Todavía no se ha iniciado una sesión"),
             ("log", "Registro", "—"), ("logging", "Estado del registro", "Registro reciente: máx. 3 MiB"),
@@ -282,38 +311,37 @@ class App:
             self.live_vars[key] = variable
             self._label(detail, textvariable=variable, style="Panel.TLabel", wraplength=730,
                         foreground=RED if key == "error" else TEXT).grid(row=row, column=1, sticky="w", pady=4)
-        self.live_hint_var = tk.StringVar(self.root, "Configura AutoNexus y AutoAim en sus pestañas. Abre RotMG Exalt y pulsa Iniciar aquí.")
+        self.live_hint_var = tk.StringVar(self.root, "Configura los módulos en sus pestañas. Abre RotMG Exalt y pulsa Iniciar bot aquí.")
         self._label(p, textvariable=self.live_hint_var, style="Muted.TLabel", wraplength=960).grid(row=3, column=0, sticky="ew", pady=(12, 12))
         self._label(p, "ACTIVIDAD DE LA SESIÓN · Registro reciente: máx. 3 MiB", style="Muted.TLabel", font=("Segoe UI Semibold", 9)).grid(row=4, column=0, sticky="w", pady=(0, 6))
         self.live_log = tk.Text(p, height=5, background=PANEL, foreground=MUTED, borderwidth=0,
                                 highlightthickness=0, wrap="word", font=("Consolas", 9), padx=12, pady=10, state="disabled")
         self.live_log.grid(row=5, column=0, sticky="nsew")
 
-    def _save_controls(self, parent, row):
-        line = ttk.Frame(parent)
-        line.grid(row=row, column=0, sticky="ew", pady=(18, 0))
-        button = ttk.Button(line, text="Guardar configuración", command=self.save_parameters)
-        button.pack(side="left", padx=(0, 14))
-        self.config_widgets.append(button)
-        self._label(line, textvariable=self.draft_status_var, style="Muted.TLabel", wraplength=690).pack(side="left")
+    def _autosave_status(self, parent, row):
+        self._label(parent, textvariable=self.draft_status_var, style="Muted.TLabel", wraplength=900).grid(
+            row=row, column=0, sticky="w", pady=(18, 0))
 
     def _build_nexus(self):
         p = self.nexus_tab
         p.columnconfigure(0, weight=1)
         self._label(p, "AutoNexus", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w")
-        self._label(p, "Configura la salida al Nexus. La sesión se inicia y detiene desde Juego en vivo.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(5, 16))
+        self._label(p, "Los cambios se guardan y se aplican automáticamente durante la sesión.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(5, 16))
         settings = ttk.Frame(p, style="Panel.TFrame", padding=20)
         settings.grid(row=2, column=0, sticky="ew")
-        self._label(settings, "Salir bajo", style="PanelMuted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 24))
+        self.nexus_enabled_check = ttk.Checkbutton(settings, text="Activar AutoNexus", variable=self.draft.nexus_enabled,
+                                                  command=self.refresh_game_bindings)
+        self.nexus_enabled_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        self._label(settings, "Salir bajo", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 24))
         self.threshold_input = ttk.Spinbox(settings, from_=1, to=99, increment=1, width=8,
             textvariable=self.draft.threshold, font=("Segoe UI Semibold", 22))
-        self.threshold_input.grid(row=0, column=1, sticky="w")
-        self._label(settings, "% de vida", style="PanelMuted.TLabel").grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.threshold_input.grid(row=1, column=1, sticky="w")
+        self._label(settings, "% de vida", style="PanelMuted.TLabel").grid(row=1, column=2, sticky="w", padx=(12, 0))
         self.limit_var = tk.StringVar(self.root)
-        self._label(settings, textvariable=self.limit_var, style="PanelMuted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 14))
+        self._label(settings, textvariable=self.limit_var, style="PanelMuted.TLabel").grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 14))
         self.prediction_check = ttk.Checkbutton(settings, text="Prever daño de proyectiles", variable=self.draft.prediction_enabled)
-        self.prediction_check.grid(row=2, column=0, columnspan=3, sticky="w")
-        self._label(settings, "Usa el daño efectivo de los golpes aceptados por el juego. La predicción no garantiza una salida a tiempo.", style="PanelMuted.TLabel", wraplength=880).grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        self.prediction_check.grid(row=3, column=0, columnspan=3, sticky="w")
+        self._label(settings, "Usa el daño efectivo de los golpes aceptados por el juego. La predicción no garantiza una salida a tiempo.", style="PanelMuted.TLabel", wraplength=880).grid(row=4, column=0, columnspan=3, sticky="w", pady=(2, 0))
         keys = ttk.Frame(p, style="Panel.TFrame", padding=20)
         keys.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         keys.columnconfigure(0, weight=1)
@@ -329,15 +357,16 @@ class App:
             values=("CTRL", "RCTRL", *tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")), state="readonly", width=12)
         self.key_combo.pack(side="left")
         self._label(keys, "La tecla manual sólo se usa al desmarcar la lectura automática y debe coincidir con la del juego.", style="PanelMuted.TLabel", wraplength=870).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        self.config_widgets.extend((self.threshold_input, self.prediction_check, self.detect_keys_check, self.refresh_keys_button))
+        self.config_widgets.extend((self.nexus_enabled_check, self.threshold_input, self.prediction_check,
+                                    self.detect_keys_check, self.refresh_keys_button))
         self._label(p, "Nexus excluido · Un intento por mapa · Filtros de inmunidad sin verificar", style="Muted.TLabel").grid(row=4, column=0, sticky="w", pady=(14, 0))
-        self._save_controls(p, 5)
+        self._autosave_status(p, 5)
 
     def _build_autoaim(self):
         p = self.aim_tab
         p.columnconfigure(0, weight=1)
         self._label(p, "AutoAim · Close to Mouse", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w")
-        self._label(p, "Elige el enemigo cercano al cursor. La sesión se inicia y detiene desde Juego en vivo.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(5, 16))
+        self._label(p, "Elige el enemigo cercano al cursor. Los cambios se aplican automáticamente.", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(5, 16))
         settings = ttk.Frame(p, style="Panel.TFrame", padding=20)
         settings.grid(row=2, column=0, sticky="ew")
         settings.columnconfigure(1, weight=1)
@@ -363,10 +392,37 @@ class App:
         self._label(info, "Con AutoAim activado, apunta mientras el autofire del juego está encendido; no necesitas mantener una tecla pulsada.", style="PanelMuted.TLabel", wraplength=900).pack(anchor="w")
         self._label(info, textvariable=self.autofire_binding_var, style="PanelMuted.TLabel", wraplength=900).pack(anchor="w", pady=(12, 0))
         self.config_widgets.extend((self.aim_enabled_check, self.prioritize_bosses_check, self.ignore_walls_check, self.extrapolation_input, self.aim_radius_input))
-        self._save_controls(p, 4)
+        self._autosave_status(p, 4)
+
+    def _build_debuffs(self):
+        p = self.debuffs_tab
+        p.columnconfigure(0, weight=1)
+        self._label(p, "Debuffs", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w")
+        self._label(p, "Configuración de Confuse y Quiet. Revisa su estado en Juego en vivo después de iniciar.",
+                    style="Muted.TLabel", wraplength=900).grid(row=1, column=0, sticky="w", pady=(5, 16))
+        settings = ttk.Frame(p, style="Panel.TFrame", padding=20)
+        settings.grid(row=2, column=0, sticky="ew")
+        self.debuffs_enabled_check = ttk.Checkbutton(settings, text="Activar módulo Debuffs", variable=self.draft.debuffs_enabled)
+        self.debuffs_enabled_check.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        self.confuse_check = ttk.Checkbutton(settings, text="Confuse", variable=self.draft.confuse)
+        self.quiet_check = ttk.Checkbutton(settings, text="Quiet", variable=self.draft.quiet)
+        self.confuse_check.grid(row=1, column=0, sticky="w")
+        self.quiet_check.grid(row=2, column=0, sticky="w")
+        self._label(settings, "AntiConfuse mantiene los controles de movimiento habituales del personaje local. "
+                    "La integración se ha comprobado por análisis estático; falta una prueba en juego.",
+                    style="PanelMuted.TLabel", wraplength=900).grid(row=3, column=0, sticky="w", pady=(12, 0))
+        self.quiet_reason_var = tk.StringVar(self.root, "" if QUIET_SUPPORTED else QUIET_UNSUPPORTED_REASON)
+        self._label(settings, textvariable=self.quiet_reason_var, style="PanelMuted.TLabel", wraplength=900).grid(
+                        row=4, column=0, sticky="w", pady=(12, 0))
+        self.config_widgets.extend((self.debuffs_enabled_check, self.confuse_check, self.quiet_check))
+        self._autosave_status(p, 3)
 
     def _draft_changed(self, *unused):
-        self.draft_status_var.set("Cambios para el próximo inicio. Guardar no inicia el bot.")
+        if not self._initializing and not self.closing:
+            self._draft_dirty = True
+            self.draft_status_var.set("Editando… los cambios válidos se guardarán automáticamente.")
+            self._cancel_autosave()
+            self._autosave_after = self.root.after(500, self._autosave)
         try:
             preview = AutoNexus(self.draft.threshold_percent() / 100, use_state_filters=False)
             preview.update_health(100, 100)
@@ -374,27 +430,38 @@ class App:
             self.limit_var.set(f"Con 100 HP: límite {limit}; sale con {limit - 1} HP o menos.")
         except ValueError as error:
             self.limit_var.set(str(error))
+        if self.runtime_thread is None and not self.draft.nexus_enabled.get():
+            self.nexus_binding_var.set("AutoNexus desactivado; no se enviará la tecla Nexus.")
+        if self.runtime_thread is None and self.cleanup_complete and not self.closing:
+            self.live_hint_var.set("Configura los módulos en sus pestañas. Abre RotMG Exalt y pulsa Iniciar bot aquí."
+                if self.draft.any_module_enabled() else "Activa al menos un módulo con una función disponible seleccionada para iniciar el bot.")
         self._sync_controls()
 
     def _sync_controls(self):
         running = self.runtime_thread is not None
-        locked = running or self.closing or self.updates_panel.installing
+        locked = self.closing or self.updates_panel.installing
         for widget in self.config_widgets:
             widget.configure(state="disabled" if locked else "normal")
-        self.key_combo.configure(state="readonly" if not locked and not self.draft.detect_game_keys.get() else "disabled")
-        self.start_button.configure(state="normal" if not locked and self.cleanup_complete else "disabled")
+        self.quiet_check.configure(state="normal" if not locked and QUIET_SUPPORTED else "disabled")
+        self.key_combo.configure(state="readonly" if not locked and self.draft.nexus_enabled.get()
+                                 and not self.draft.detect_game_keys.get() else "disabled")
+        self.start_button.configure(state="normal" if not running and not locked and self.cleanup_complete and self.draft.any_module_enabled() else "disabled")
         self.stop_button.configure(state="normal" if running and not self.stop_event.is_set() else "disabled")
-        if running:
-            self.draft_status_var.set("Configuración bloqueada hasta detener la sesión.")
         self._update_banner()
 
     def _update_banner(self):
         color, background = BLUE, "#192e49"
         if self.runtime_thread is None:
             text = "DETENIDO · INICIA LA SESIÓN DESDE JUEGO EN VIVO"
+        elif self._configuration_uncertain:
+            text = "DETENIENDO · CONFIGURACIÓN SIN CONFIRMAR"
+        elif self.applied_config is None:
+            text = "CONECTANDO · ESPERANDO CONFIRMACIÓN DE CONFIGURACIÓN"
         else:
             color, background = AMBER, "#44321f"
-            if self.nexus_binding_status == "waiting":
+            if self.applied_config and not self.applied_config.autonexus_enabled:
+                text = "ACTIVO · AUTONEXUS DESACTIVADO"
+            elif self.nexus_binding_status == "waiting":
                 text = "ACTIVO · NEXUS ESPERA LEER LA TECLA DEL JUEGO"
             elif self.nexus_binding_status == "unsupported":
                 text = "ACTIVO · TECLA NEXUS NO ADMITIDA"
@@ -402,21 +469,25 @@ class App:
                 text = "ACTIVO · NEXUS PUEDE ENVIAR " + str(self.applied_key)
             if self.applied_config and self.applied_config.autoaim.enabled:
                 text += " · AUTOAIM SEGÚN AUTOFIRE"
+            if self.applied_config and self.applied_config.debuffs.enabled:
+                text += " · DEBUFFS"
         self.banner_var.set(text)
         self.banner.configure(background=background, foreground=color)
 
     def refresh_game_bindings(self):
-        if self.runtime_thread is not None or self.closing:
+        if self.closing:
             return
         self._sync_controls()
         if not self.draft.detect_game_keys.get():
-            self.nexus_binding_var.set("Lectura automática desactivada. Nexus usará la tecla manual elegida abajo.")
+            self.nexus_binding_var.set("Lectura automática desactivada. Nexus usará la tecla manual elegida abajo."
+                if self.draft.nexus_enabled.get() else "AutoNexus desactivado; no se enviará la tecla Nexus.")
             self.autofire_binding_var.set("El estado de autofire se observa dentro del juego al iniciar; no depende de mantener una tecla.")
             return
         try:
             bindings = self.settings_reader()
         except Exception:
-            self.nexus_binding_var.set("No se pudieron leer las teclas guardadas. Nexus se comprobará dentro del juego al iniciar.")
+            self.nexus_binding_var.set("No se pudieron leer las teclas guardadas. Nexus se comprobará dentro del juego al iniciar."
+                if self.draft.nexus_enabled.get() else "AutoNexus desactivado; no se enviará la tecla Nexus.")
             self.autofire_binding_var.set("Autofire se comprobará dentro del juego al iniciar.")
             return
         nexus, fire = bindings.get("nexus"), bindings.get("autofire")
@@ -424,57 +495,88 @@ class App:
             key = normalize_nexus_key(nexus.key if nexus else None)
         except ValueError:
             key = None
-        if key:
-            self.draft.nexus_key.set(key)
+        if not self.draft.nexus_enabled.get():
+            self.nexus_binding_var.set("AutoNexus desactivado; no se enviará la tecla Nexus.")
+        elif key:
             self.nexus_binding_var.set(f"Nexus: {key} (guardada en el juego); se confirmará dentro del juego al iniciar.")
         else:
             self.nexus_binding_var.set("Nexus: sin valor guardado reconocido; se leerá dentro del juego al iniciar.")
         self.autofire_binding_var.set(f"Autofire: {fire.key} (guardada en el juego); se confirmará al iniciar."
             if fire and fire.key else "Autofire: sin valor guardado reconocido; se leerá dentro del juego al iniciar.")
 
-    def save_parameters(self):
-        if self.runtime_thread is not None or self.closing or self.updates_panel.installing:
-            return False
+    def _cancel_autosave(self):
+        if self._autosave_after is not None:
+            self.root.after_cancel(self._autosave_after)
+            self._autosave_after = None
+
+    def _autosave(self):
+        self._autosave_after = None
+        self.flush_configuration()
+
+    def flush_configuration(self, *, apply_live=True):
+        """Save one complete valid snapshot; queue live work without calling RPC."""
+        self._cancel_autosave()
         try:
             config = self.draft.validate()
-            backup = save_config(self.config_path, config)
+            if config != self._last_saved_config:
+                save_config(self.config_path, config)
+                self._last_saved_config = config
         except (OSError, ValueError, TypeError, tk.TclError) as error:
             self.last_error = display_text(error)
-            messagebox.showerror("No se pudo guardar", self.last_error, parent=self.root)
-            return False
-        self.draft_status_var.set("Configuración guardada. Se aplicará al próximo inicio.")
-        self.footer_var.set("Configuración guardada. " + (f"Copia anterior: {Path(backup).name}" if backup else "Sin cambios pendientes."))
-        return True
+            self.draft_status_var.set("Sin guardar ni aplicar: " + self.last_error)
+            return None
+        self._draft_dirty = False
+        live = (apply_live and self.runtime_thread is not None and self.runtime_control is not None
+                and self.stop_event is not None and not self.stop_event.is_set() and not self._configuration_uncertain)
+        if live and config != self._requested_config:
+            self.pending_revision = self.runtime_control.request(config)
+            self._requested_config = config
+        if live and self.pending_revision is not None:
+            self.draft_status_var.set("Guardado · pendiente de aplicar en el juego.")
+        elif live:
+            self.draft_status_var.set("Guardado y aplicado en el juego.")
+        else:
+            self.draft_status_var.set("Guardado automáticamente." if self.runtime_thread is None else "Guardado; se usará al próximo inicio.")
+        return config
 
     def start_live(self):
         if self.notebook.select() != str(self.live_tab) or self.runtime_thread is not None or not self.cleanup_complete or self.closing or self.updates_panel.installing:
             return False
-        if self.draft.detect_game_keys.get():
-            self.refresh_game_bindings()
-        try:
-            config = self.draft.validate()
-        except (ValueError, TypeError, tk.TclError) as error:
-            self.last_error = display_text(error)
-            messagebox.showerror("Configuración inválida", self.last_error, parent=self.root)
+        config = self.flush_configuration(apply_live=False)
+        if config is None:
             return False
+        if not self.draft.any_module_enabled():
+            self.live_hint_var.set("Activa al menos un módulo con una función disponible seleccionada para iniciar el bot.")
+            return False
+        if self.draft.nexus_enabled.get() and self.draft.detect_game_keys.get():
+            self.refresh_game_bindings()
         stop_event = self.stop_event = threading.Event()
         inbox = self.runtime_inbox = RuntimeInbox()
+        control = self.runtime_control = RuntimeControl()
         self._runtime_finished_seen = False
         self.cleanup_complete = False
-        self.applied_config = config
-        self.applied_key = config.nexus_key
-        self.nexus_binding_status = "waiting" if config.detect_game_keys else "manual"
+        self.applied_config = None
+        self.applied_key = None
+        self.nexus_binding_status = None
+        self.pending_revision = 0
+        self._requested_config = config
+        self._applied_revision = -1
+        self._configuration_uncertain = False
         self.status_var.set("Conectando")
         self.live_vars["error"].set("Ninguno")
         self.live_vars["delivery"].set("Ninguna")
         self.live_vars["logging"].set("Registro reciente: máx. 3 MiB")
         self.live_vars["autoaim"].set("Esperando datos del juego…" if config.autoaim.enabled else "AutoAim desactivado")
-        self._render_applied_config()
+        self.live_vars["debuffs"].set("Esperando datos del juego…" if config.debuffs.enabled else "Debuffs desactivado")
+        if not config.autonexus_enabled:
+            self.live_vars["decision"].set("AutoNexus desactivado")
+        self.live_vars["applied"].set("Esperando confirmación de la configuración en el juego…")
+        self.draft_status_var.set("Guardado · esperando confirmación del juego.")
         self.live_hint_var.set("Conectando con el juego…")
 
         def worker():
             try:
-                code = self.runtime_runner(config, active=True, stop_event=stop_event, on_update=inbox.put)
+                code = self.runtime_runner(config, active=True, stop_event=stop_event, on_update=inbox.put, control=control)
             except Exception as error:
                 inbox.put({"event": "worker_failure", "error": display_text(error)})
                 code = 1
@@ -499,8 +601,11 @@ class App:
         config = self.applied_config
         key = ("Nexus pendiente de lectura" if self.nexus_binding_status == "waiting" else
                "Tecla Nexus no admitida" if self.nexus_binding_status == "unsupported" else self.applied_key)
-        self.live_vars["applied"].set(f"{config.threshold * 100:g} % · {key} · predicción " +
-            ("sí" if config.prediction_enabled else "no") + " · AutoAim " + ("sí" if config.autoaim.enabled else "no"))
+        text = (f"AutoNexus sí · {config.threshold * 100:g} % · {key} · predicción " +
+                ("sí" if config.prediction_enabled else "no")) if config.autonexus_enabled else "AutoNexus no"
+        text += " · AutoAim " + ("sí" if config.autoaim.enabled else "no")
+        text += " · Debuffs " + ("sí" if config.debuffs.enabled else "no")
+        self.live_vars["applied"].set(text)
 
     def _show_runtime_bindings(self, bindings):
         if not isinstance(bindings, dict):
@@ -516,7 +621,7 @@ class App:
             key = unity_key_name(item.get("unity_code"))
             if key:
                 resolved[name] = key
-        if self.applied_config and self.applied_config.detect_game_keys:
+        if self.applied_config and self.applied_config.autonexus_enabled and self.applied_config.detect_game_keys:
             try:
                 nexus = normalize_nexus_key(resolved.get("nexus"))
             except ValueError:
@@ -541,7 +646,56 @@ class App:
         kind = record.get("event")
         if record.get("log_path"):
             self.live_vars["log"].set(display_text(record["log_path"]))
-        if kind == "lifecycle":
+        if kind == "config_applied":
+            if self._configuration_uncertain:
+                return
+            revision = record.get("revision")
+            try:
+                if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+                    raise ValueError("El juego no confirmó la revisión de configuración.")
+                config = config_from_mapping(record.get("configuration"))
+            except (ValueError, TypeError) as error:
+                self._handle_runtime_record({"event": "config_error", "error": str(error)})
+                return
+            if revision < self._applied_revision:
+                return
+            previous = self.applied_config
+            self.applied_config = config
+            self._applied_revision = revision
+            if not config.autonexus_enabled:
+                self.applied_key, self.nexus_binding_status = None, "disabled"
+                self.live_vars["decision"].set("AutoNexus desactivado")
+            elif not config.detect_game_keys:
+                self.applied_key, self.nexus_binding_status = config.nexus_key, "manual"
+            elif not (previous and previous.autonexus_enabled and previous.detect_game_keys
+                      and self.nexus_binding_status == "detected"):
+                self.applied_key, self.nexus_binding_status = None, "waiting"
+            if self.pending_revision is not None and revision >= self.pending_revision:
+                self.pending_revision = None
+            if not self._draft_dirty:
+                self.draft_status_var.set("Guardado y aplicado en el juego." if self.pending_revision is None else
+                                          "Guardado · pendiente de aplicar el último cambio en el juego.")
+            self._render_applied_config()
+            self._update_banner()
+        elif kind == "config_error":
+            self._configuration_uncertain = True
+            self.applied_config = None
+            self.applied_key = None
+            self.pending_revision = None
+            error = display_text(record.get("error") or record.get("reason") or "No se confirmó el cambio de configuración.")
+            self.live_vars["applied"].set("Configuración sin confirmar · deteniendo la sesión")
+            self.live_vars["error"].set(error)
+            self.live_hint_var.set("No se confirmó la configuración. La sesión se detiene para completar la limpieza.")
+            self.draft_status_var.set("Guardado, pero no se confirmó su aplicación: " + error)
+            self.status_var.set("Error")
+            if self.stop_event is not None:
+                self.stop_event.set()
+            self._sync_controls()
+        elif kind == "stop_requested":
+            self.stop_live()
+            if record.get("reason") == "no_enabled_modules":
+                self.live_hint_var.set("Todos los módulos están desactivados. La sesión se detiene; reactivarlos no inicia el bot automáticamente.")
+        elif kind == "lifecycle":
             status = record.get("status")
             if status == "finished":
                 self._runtime_finished_seen = True
@@ -554,7 +708,7 @@ class App:
                 self.live_hint_var.set("Sesión cerrada. El juego sigue abierto." if self.cleanup_complete else "La limpieza quedó incompleta. No se permite iniciar otra sesión.")
             elif status == "running":
                 self.status_var.set("Activo")
-                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa cuando está habilitado y el autofire está encendido.")
+                self.live_hint_var.set("Vuelve a la ventana del juego. Los módulos habilitados están en marcha.")
             elif status == "stopping":
                 self.status_var.set("Deteniendo")
             else:
@@ -578,7 +732,10 @@ class App:
             complete = record.get("complete", record.get("cleanup_complete"))
             self._append_log("Limpieza: " + ("completa" if complete else display_text(record.get("errors", "en curso"))))
         elif kind == "telemetry":
-            detect = self.applied_config is not None and self.applied_config.detect_game_keys
+            if self._configuration_uncertain:
+                return
+            nexus_enabled = self.applied_config is not None and self.applied_config.autonexus_enabled
+            detect = nexus_enabled and self.applied_config.detect_game_keys
             binding_status = record.get("nexus_binding_status")
             if detect and binding_status in ("waiting", "unsupported", "detected"):
                 self.nexus_binding_status = binding_status
@@ -591,14 +748,16 @@ class App:
             self.live_vars["map"].set(display_text(record.get("map_name") or frame.get("map_name") or "Sin datos recientes", 120))
             decision = record.get("decision") or {}
             self.live_vars["decision"].set("SOLICITAR NEXUS" if decision.get("action") == "escape" else short_reason(decision.get("reason")))
-            if detect and self.nexus_binding_status == "waiting":
+            if self.applied_config is not None and not nexus_enabled:
+                self.live_vars["decision"].set("AutoNexus desactivado")
+            elif detect and self.nexus_binding_status == "waiting":
                 self.live_vars["decision"].set("Esperando tecla Nexus del juego")
                 self.live_hint_var.set("Esperando tecla Nexus del juego. La sesión aún no puede solicitar una salida.")
             elif detect and self.nexus_binding_status == "unsupported":
                 self.live_vars["decision"].set("Tecla Nexus no admitida")
                 self.live_hint_var.set("La tecla Nexus no está admitida. Detén la sesión y configura una letra o Control; o desmarca «Leer teclas del juego» en AutoNexus y elige una tecla manual que coincida con el juego.")
             elif binding_status in ("detected", "manual"):
-                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa cuando está habilitado y el autofire está encendido.")
+                self.live_hint_var.set("Vuelve a la ventana del juego. Los módulos habilitados están en marcha.")
             focus = record.get("game_foreground")
             self.live_vars["focus"].set("En primer plano" if focus is True else "Vuelve a la ventana del juego" if focus is False else "Sin comprobar")
             delivery = record.get("delivery") or {}
@@ -624,6 +783,29 @@ class App:
                     if aim.get("status"):
                         text += " · " + str(aim["status"])[:160]
                 self.live_vars["autoaim"].set(display_text(text))
+            debuffs = record.get("debuffs")
+            if isinstance(debuffs, dict):
+                if debuffs.get("enabled") is False:
+                    text = "Debuffs desactivado"
+                else:
+                    text = "Activo" if debuffs.get("active") is True else "Sin intervención" if debuffs.get("active") is False else "Estado sin confirmar"
+                    if isinstance(debuffs.get("confuse"), bool):
+                        text += " · Confuse" + (" sí" if debuffs["confuse"] else " no")
+                    if not QUIET_SUPPORTED or debuffs.get("quiet_supported") is False:
+                        text += " · Quiet no disponible"
+                    elif isinstance(debuffs.get("quiet"), bool):
+                        text += " · Quiet" + (" sí" if debuffs["quiet"] else " no")
+                    for key, label in (("checks", "comprobaciones"), ("blocked", "bloqueos")):
+                        value = debuffs.get(key)
+                        if isinstance(value, int) and not isinstance(value, bool):
+                            text += " · " + label + " " + display_text(value, 24)
+                    if debuffs.get("quiet_reason"):
+                        text += " · " + display_text(debuffs["quiet_reason"], 180)
+                    if debuffs.get("status"):
+                        text += " · " + display_text(debuffs["status"], 160)
+                    if debuffs.get("error"):
+                        text += " · " + display_text(debuffs["error"], 240)
+                self.live_vars["debuffs"].set(display_text(text))
 
     def _can_install_update(self):
         if self.runtime_thread is not None:
@@ -656,10 +838,14 @@ class App:
             # Consume it before deciding whether this owned session is clean.
             self._consume_runtime_inbox()
             self.runtime_thread = None
+            self.runtime_control = None
+            self.pending_revision = None
             if not self._runtime_finished_seen:
                 self.cleanup_complete = False
                 self.status_var.set("Error")
                 self.live_hint_var.set("El runtime terminó sin confirmar la limpieza. Reinicio bloqueado.")
+            if not self._draft_dirty and not self._configuration_uncertain:
+                self.draft_status_var.set("Configuración guardada. El bot está detenido; los cambios se usarán al iniciarlo.")
             if self.closing and not self.cleanup_complete:
                 self.closing = False
                 self.footer_var.set("La ventana permanece abierta porque falta confirmar la limpieza del runtime.")
@@ -683,6 +869,9 @@ class App:
             self._append_log(note)
 
     def close(self):
+        self._cancel_autosave()
+        if self._draft_dirty:
+            self.flush_configuration(apply_live=False)
         self.closing = True
         updates_done = self.updates_panel.close()
         if self.runtime_thread is not None:
@@ -696,6 +885,7 @@ class App:
         self._destroy()
 
     def _destroy(self):
+        self._cancel_autosave()
         if self._tick_after is not None:
             self.root.after_cancel(self._tick_after)
             self._tick_after = None

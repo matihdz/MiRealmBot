@@ -25,20 +25,28 @@ class PortableBoundaryTests(unittest.TestCase):
             path = self.app / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"public test asset")
-        (self.app / "autonexus.json").write_bytes((ROOT / "autonexus.example.json").read_bytes())
+        public_config = (ROOT / "mirealmbot.example.json").read_bytes()
+        (self.app / "autonexus.json").write_bytes(public_config)
+        (self.app / "mirealmbot.example.json").write_bytes(public_config)
 
     def test_public_payload_is_accepted(self):
         validate_distribution(self.app)
 
     def test_saved_personal_config_is_rejected(self):
-        (self.app / "autonexus.json").write_text('{"threshold":0.40}', encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "configuración pública"):
-            validate_distribution(self.app)
+        for name in ("autonexus.json", "mirealmbot.example.json"):
+            with self.subTest(name=name):
+                target = self.app / name
+                public = target.read_bytes()
+                target.write_text('{"threshold":0.40}', encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "configuración pública"):
+                    validate_distribution(self.app)
+                target.write_bytes(public)
 
     def test_capture_and_game_binary_are_rejected(self):
         for relative in ("analysis/private.jsonl", "_internal/GameAssembly.dll",
                          "backup.json.bak", "capture.jsonl", ".venv/private.txt",
-                         "_internal/examples/demo-combat.jsonl", "_internal/replay_autonexus.py"):
+                         "_internal/examples/demo-combat.jsonl", "_internal/replay_autonexus.py",
+                         "mirealmbot.json"):
             with self.subTest(relative=relative):
                 target = self.app / relative
                 target.parent.mkdir(parents=True, exist_ok=True)

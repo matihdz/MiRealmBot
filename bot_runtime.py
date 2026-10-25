@@ -1,4 +1,4 @@
-"""Internal health telemetry host; observe by default, --active requests a key.
+"""MiRealmBot module runtime; CLI observes by default and --active enables actions.
 
 Requires the adjacent Frida agent and a matching, locally pinned GameAssembly.
 The game must already be running. No account payloads are written to the log.
@@ -19,14 +19,16 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
-from app_paths import APP_ROOT, resource_path
+from app_paths import APP_ROOT, ensure_default_config, resource_path
 from autoaim_settings import AutoAimSettings, autoaim_mapping, parse_autoaim
 from autonexus_controller import Controller, HealthFrame
 from autonexus_core import Action, AutoNexus, Decision
 from damage_prediction import AcceptedHitPrediction, finite_age
+from debuffs_settings import DebuffSettings, debuffs_mapping, parse_debuffs
 from game_settings import unity_key_name
 from probe_game import EXPECTED_EXE, ProcessIdentity
-from runtime_logs import BoundedRuntimeLog
+from runtime_logs import BoundedRuntimeLog, LOG_BASENAME
+from runtime_control import RuntimeControl
 from windows_nexus import (NexusInputBlocked, NexusInputError, WindowsNexus,
                            Win32InputBackend, normalize_nexus_key)
 
@@ -47,12 +49,14 @@ class RuntimeConfig:
     prediction_enabled: bool = False
     autoaim: AutoAimSettings = AutoAimSettings()
     detect_game_keys: bool = True
+    autonexus_enabled: bool = True
+    debuffs: DebuffSettings = DebuffSettings()
 
 
 def config_from_mapping(data: object, threshold_percent: float | None = None) -> RuntimeConfig:
     """Validate CLI and interface configuration through the semantic owners."""
     if not isinstance(data, dict):
-        raise ValueError("autonexus.json debe contener un objeto JSON")
+        raise ValueError("La configuración de MiRealmBot debe contener un objeto JSON")
     threshold = data.get("threshold", 0.30)
     if threshold_percent is not None:
         if isinstance(threshold_percent, bool) or not isinstance(threshold_percent, (int, float)):
@@ -78,11 +82,15 @@ def config_from_mapping(data: object, threshold_percent: float | None = None) ->
     if not isinstance(detect_game_keys, bool):
         raise ValueError("detect_game_keys debe ser true o false")
     autoaim = parse_autoaim(data.get("autoaim"))
+    autonexus_enabled = data.get("autonexus_enabled", True)
+    if not isinstance(autonexus_enabled, bool):
+        raise ValueError("AutoNexus activado debe ser true o false")
+    debuffs = parse_debuffs(data.get("debuffs"))
     # Validate now, before saving or starting a worker. Retain the supplied
     # fraction; AutoNexus owns its float32 representation when used.
     Controller(AutoNexus(threshold, use_state_filters=use_state_filters), names)
     return RuntimeConfig(threshold, key, tuple(names), pin.lower(), use_state_filters,
-                         prediction_enabled, autoaim, detect_game_keys)
+                         prediction_enabled, autoaim, detect_game_keys, autonexus_enabled, debuffs)
 
 
 def load_config(path: Path, threshold_percent: float | None = None) -> RuntimeConfig:
@@ -98,11 +106,15 @@ def config_to_mapping(config: RuntimeConfig) -> dict[str, Any]:
             "use_state_filters": config.use_state_filters,
             "prediction_enabled": config.prediction_enabled,
             "autoaim": autoaim_mapping(config.autoaim),
-            "detect_game_keys": config.detect_game_keys}
+            "detect_game_keys": config.detect_game_keys,
+            "autonexus_enabled": config.autonexus_enabled,
+            "debuffs": debuffs_mapping(config.debuffs)}
 
 
 def resolve_game_nexus_key(payload: object, config: RuntimeConfig) -> tuple[str | None, str]:
     """Use the game's current resolved binding, or the explicit manual policy."""
+    if not config.autonexus_enabled:
+        return None, "disabled"
     if not config.detect_game_keys:
         return config.nexus_key, "manual"
     if not isinstance(payload, dict):
@@ -125,13 +137,13 @@ def resolve_game_nexus_key(payload: object, config: RuntimeConfig) -> tuple[str 
 
 
 def save_config(path: Path, config: RuntimeConfig) -> Path | None:
-    """Validate, back up original bytes, and atomically replace one config file."""
+    """Validate and atomically replace settings, retaining one previous backup."""
     config = config_from_mapping(config_to_mapping(config))
     path = Path(path)
     original = path.read_bytes() if path.exists() else None
     data = {} if original is None else json.loads(original.decode("utf-8-sig"))
     if not isinstance(data, dict):
-        raise ValueError("autonexus.json debe contener un objeto JSON")
+        raise ValueError("La configuración de MiRealmBot debe contener un objeto JSON")
     data.update(config_to_mapping(config))
     replacement = (json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
     if original == replacement:
@@ -146,9 +158,8 @@ def save_config(path: Path, config: RuntimeConfig) -> Path | None:
             handle.flush()
             os.fsync(handle.fileno())
         if original is not None:
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-            backup = path.with_name(f"{path.name}.{stamp}.{uuid4().hex}.bak")
-            with backup.open("xb") as handle:
+            backup = path.with_name(f"{path.name}.bak")
+            with backup.open("wb") as handle:
                 handle.write(original)
         os.replace(temporary, path)
         temporary = None
@@ -306,9 +317,20 @@ class _RuntimeCancelled(Exception):
     pass
 
 
+def _agent_options(config: RuntimeConfig, *, active: bool) -> dict[str, Any]:
+    aim = autoaim_mapping(config.autoaim)
+    aim["active"] = active and config.autoaim.enabled
+    debuffs = debuffs_mapping(config.debuffs)
+    debuffs["active"] = active and config.debuffs.has_protection
+    return {"prediction_enabled": config.autonexus_enabled and config.prediction_enabled,
+            "detect_game_keys": config.detect_game_keys,
+            "autoaim": aim, "debuffs": debuffs}
+
+
 def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None = None,
                 duration: float | None = None, stop_event: Any = None,
-                on_update: Callable[[dict[str, Any]], None] | None = None) -> int:
+                on_update: Callable[[dict[str, Any]], None] | None = None,
+                control: RuntimeControl | None = None) -> int:
     """Own one integration lifecycle for CLI or a single interface worker.
 
     Callbacks run on this calling thread and must enqueue UI work. Stop is
@@ -377,9 +399,13 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         record("lifecycle", status="connecting", active=active)
         check_stop()
         config = config_from_mapping(config_to_mapping(config))
+        if not (config.autonexus_enabled or config.autoaim.enabled or config.debuffs.has_protection):
+            raise ValueError("Activa al menos un módulo antes de iniciar MiRealmBot")
         controller = Controller(AutoNexus(config.threshold,
+                                         enabled=config.autonexus_enabled,
                                          use_state_filters=config.use_state_filters),
                                 config.excluded_maps)
+        prediction_enabled = config.autonexus_enabled and config.prediction_enabled
         if not isinstance(active, bool):
             raise ValueError("active debe ser true o false")
         if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int)
@@ -412,14 +438,14 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         identity = ProcessIdentity(pid, EXPECTED_EXE)
         module_path = EXPECTED_EXE.parent / "GameAssembly.dll"
         module_hash = verify_module_hash(module_path, config.gameassembly_sha256)
-        agent_path = resource_path("autonexus_agent.js")
+        agent_path = resource_path("bot_agent.js")
         source_bytes = agent_path.read_bytes()
         source_files = [resource_path(name) for name in (
-            "game_bindings_agent.js", "autoaim_agent.js", "autonexus_agent.js")]
+            "game_bindings_agent.js", "autoaim_agent.js", "debuffs_agent.js", "bot_agent.js")]
         sources = [(path, path.read_bytes()) for path in source_files]
         source = "\n".join(content.decode("utf-8") for _, content in sources)
         analysis = ROOT / "analysis"
-        log_path = analysis / "live-autonexus.jsonl"
+        log_path = analysis / f"{LOG_BASENAME}.jsonl"
         try:
             log = BoundedRuntimeLog(analysis)
             log_path = log.path
@@ -436,42 +462,43 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         identity.assert_alive()
         session = device.attach(pid)
         check_stop()
-        script = session.create_script(source, name="mirealmbot_autonexus", runtime="qjs")
+        script = session.create_script(source, name="mirealmbot_runtime", runtime="qjs")
         check_stop()
         script_load_attempted = True
         script.load()
         check_stop()
-        aim_options = autoaim_mapping(config.autoaim)
-        aim_options["active"] = active and config.autoaim.enabled
-        start = script.exports_sync.start({"prediction_enabled": config.prediction_enabled,
-                                           "detect_game_keys": config.detect_game_keys,
-                                           "autoaim": aim_options})
+        options = _agent_options(config, active=active)
+        aim_options, debuff_options = options["autoaim"], options["debuffs"]
+        start = script.exports_sync.start(options)
         verify_start(start, pid, module_path)
         identity.assert_alive()
         check_stop()
         mode = "ACTIVO" if active else "OBSERVACION"
-        print(f"AutoNexus {mode}; PID {pid}; umbral {config.threshold * 100:g}%; tecla {config.nexus_key}")
+        print(f"MiRealmBot {mode}; PID {pid}")
+        print("AutoNexus: " + (f"ACTIVADO; umbral {config.threshold * 100:g}%; tecla {config.nexus_key}"
+                                   if config.autonexus_enabled else "DESACTIVADO"))
         if config.use_state_filters:
             print("Filtros de estado: ACTIVADOS; estados desconocidos bloquean AutoNexus.")
         else:
             print("Filtros de estado: OMITIDOS por configuración; decide por vida, mapa y habilitación.")
         print("Predicción de impactos aceptados: "
-              + ("ACTIVADA (proyectiles locales)" if config.prediction_enabled else "DESACTIVADA"))
+              + ("ACTIVADA (proyectiles locales)" if prediction_enabled else "DESACTIVADA"))
         print(f"Registro: {log_path}")
         record("start", active=active, threshold=controller.engine.threshold,
                nexus_key=config.nexus_key, gameassembly_sha256=module_hash,
                process_creation_filetime=identity.created_filetime,
                use_state_filters=config.use_state_filters, bindings=start.get("bindings"),
-               prediction_enabled=config.prediction_enabled,
-               autoaim=aim_options, detect_game_keys=config.detect_game_keys,
+               prediction_enabled=prediction_enabled, autonexus_enabled=config.autonexus_enabled,
+               autoaim=aim_options, debuffs=debuff_options, detect_game_keys=config.detect_game_keys,
                prediction_scope="accepted_local_projectile_hits",
                agent_path=str(agent_path), agent_sha256=hashlib.sha256(source_bytes).hexdigest(),
                agent_sources=[{"path": str(path), "sha256": hashlib.sha256(content).hexdigest()}
                               for path, content in sources],
                injected_source_sha256=hashlib.sha256(source.encode("utf-8")).hexdigest())
-        consumer = TelemetryConsumer(controller, prediction_enabled=config.prediction_enabled)
+        consumer = TelemetryConsumer(controller, prediction_enabled=prediction_enabled)
         input_backend = Win32InputBackend()
-        actuator = WindowsNexus(backend=input_backend) if active else None
+        actuator = WindowsNexus(backend=input_backend) if active and config.autonexus_enabled else None
+        record("config_applied", revision=0, configuration=config_to_mapping(config))
         record("lifecycle", status="running", active=active)
         started = time.monotonic()
         next_report = started
@@ -480,12 +507,58 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         while duration is None or time.monotonic() - started < duration:
             check_stop()
             identity.assert_alive()
+            pending = None if control is None else control.take_latest()
+            if pending is not None:
+                revision, requested_config = pending
+                try:
+                    requested_config = config_from_mapping(config_to_mapping(requested_config))
+                    if requested_config.gameassembly_sha256 != config.gameassembly_sha256:
+                        raise ValueError("El perfil del juego no puede cambiar durante una sesión")
+                    if requested_config.excluded_maps != config.excluded_maps:
+                        raise ValueError("Los mapas excluidos no pueden cambiar durante una sesión")
+                except (ValueError, TypeError, AttributeError) as error:
+                    record("config_error", revision=revision, reason="invalid_configuration", error=str(error))
+                else:
+                    if not (requested_config.autonexus_enabled or requested_config.autoaim.enabled
+                            or requested_config.debuffs.has_protection):
+                        # No further poll or action can run; normal finalization
+                        # stops every native module without requiring configure.
+                        config = requested_config
+                        record("config_applied", revision=revision, configuration=config_to_mapping(config))
+                        record("stop_requested", reason="no_enabled_modules")
+                        break
+                    try:
+                        result = script.exports_sync.configure(_agent_options(requested_config, active=active))
+                        if not isinstance(result, dict) or result.get("configured") is not True:
+                            raise RuntimeError("El agente no confirmó la configuración aplicada")
+                        # The same core owns the map's one-request latch. Updating
+                        # settings cannot create another map or rearm an escape.
+                        controller.engine.threshold = requested_config.threshold
+                        controller.engine.use_state_filters = requested_config.use_state_filters
+                        controller.engine.enabled = requested_config.autonexus_enabled
+                        next_prediction = (requested_config.autonexus_enabled
+                                           and requested_config.prediction_enabled)
+                        if next_prediction != prediction_enabled:
+                            consumer.prediction.enabled = next_prediction
+                            consumer.prediction.last_events = ()
+                            consumer.prediction.invalidate("configuration_changed")
+                        if active and requested_config.autonexus_enabled and actuator is None:
+                            actuator = WindowsNexus(backend=input_backend)
+                    except Exception as error:
+                        # The native side may already have changed. Stop and own
+                        # cleanup instead of reporting an old snapshot as applied.
+                        record("config_error", revision=revision, reason="configure_failed", error=str(error))
+                        raise RuntimeError(f"No se pudo aplicar la configuración en vivo: {error}") from error
+                    config = requested_config
+                    prediction_enabled = next_prediction
+                    record("config_applied", revision=revision, configuration=config_to_mapping(config))
+                    check_stop()
             payload = script.exports_sync.poll()
             check_stop()
             resolved_key, binding_status = resolve_game_nexus_key(payload, config)
             # Keep collecting damage/health while waiting for the canonical
             # binding; do not consume a map's one-shot request with a guessed key.
-            controller.engine.enabled = resolved_key is not None
+            controller.engine.enabled = config.autonexus_enabled and resolved_key is not None
             # Preserve every event batch, including a rejected/lost one. Decision
             # output is rate-limited independently and cannot be its only log.
             if isinstance(payload, dict) and (payload.get("events") or payload.get("events_lost")):
@@ -493,7 +566,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                        age_ms=payload.get("age_ms"), events=payload.get("events"),
                        events_lost=payload.get("events_lost", False),
                        diagnostics=payload.get("diagnostics"),
-                       prediction_enabled=config.prediction_enabled)
+                       prediction_enabled=prediction_enabled)
             sample, decision = consumer.consume(payload)
             if consumer.prediction.last_events:
                 record("prediction_state", sequence=sample.sequence,
@@ -519,6 +592,7 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
                               prediction=consumer.prediction.state(),
                               diagnostics=payload.get("diagnostics") if isinstance(payload, dict) else None,
                               autoaim=payload.get("autoaim") if isinstance(payload, dict) else None,
+                              debuffs=payload.get("debuffs") if isinstance(payload, dict) else None,
                               game_bindings=payload.get("game_bindings") if isinstance(payload, dict) else None,
                               nexus_binding_status=binding_status,
                               decision=_decision_record(decision), delivery=delivery)
@@ -548,11 +622,11 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
         record("stop_requested")
     except KeyboardInterrupt:
         code = 130
-        print("AutoNexus interrumpido; descargando la integración.")
+        print("MiRealmBot interrumpido; descargando la integración.")
         record("interrupted")
     except Exception as error:
         code = 1
-        print(f"AutoNexus detenido: {error}", file=sys.stderr)
+        print(f"MiRealmBot detenido: {error}", file=sys.stderr)
         record("error", error_type=type(error).__name__, error=str(error))
     finally:
         record("lifecycle", status="stopping", active=active)
@@ -577,14 +651,14 @@ def run_runtime(config: RuntimeConfig, *, active: bool = False, pid: int | None 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=ROOT / "autonexus.json")
+    parser.add_argument("--config", type=Path, help="Archivo de configuración; por defecto mirealmbot.json")
     parser.add_argument("--pid", type=int, help="PID del juego ya abierto; siempre se verifica la ruta")
     parser.add_argument("--threshold", type=float, help="Umbral en porcentaje, mayor que 0 y menor que 100")
     parser.add_argument("--active", action="store_true", help="Solicitar la tecla Nexus; por defecto sólo observa")
     parser.add_argument("--duration", type=_positive_duration, help="Detener después de estos segundos")
     args = parser.parse_args(argv)
     try:
-        config = load_config(args.config, args.threshold)
+        config = load_config(ensure_default_config() if args.config is None else args.config, args.threshold)
     except (OSError, ValueError, TypeError) as error:
         parser.error(str(error))
     if sys.platform != "win32":

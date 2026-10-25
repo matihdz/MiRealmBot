@@ -7,10 +7,8 @@ if not exist ".venv\Scripts\python.exe" (
 )
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --only-binary=:all: -r requirements.txt
 if errorlevel 1 goto error
-if not exist "autonexus.json" (
-    copy /y "autonexus.example.json" "autonexus.json" >nul
-    if errorlevel 1 goto error
-)
+".venv\Scripts\python.exe" -B -c "from app_paths import ensure_default_config; ensure_default_config()"
+if errorlevel 1 goto error
 echo.
 echo Entorno listo.
 pause

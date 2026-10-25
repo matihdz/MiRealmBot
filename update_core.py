@@ -25,7 +25,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 import zipfile
 
-from app_paths import APP_ROOT, resource_path
+from app_paths import (APP_ROOT, CONFIG_TEMPLATE_PATH, DEFAULT_CONFIG_PATH,
+                       LEGACY_CONFIG_PATH, resource_path)
 from app_version import VERSION
 
 
@@ -281,7 +282,7 @@ def extract_archive(archive_path: Path, destination: Path, *, cancel_event: thre
 
 
 def validate_staged(staged_root: Path, release: ReleaseInfo) -> None:
-    required = ("MiRealmBot.exe", "_internal/python312.dll", "_internal/autonexus_agent.js", "autonexus.json", "BUILD-MANIFEST.json")
+    required = ("MiRealmBot.exe", "_internal/python312.dll", "BUILD-MANIFEST.json")
     if not all((staged_root / relative).is_file() for relative in required):
         raise UpdateError("La descarga no contiene todos los archivos del programa.")
     manifest_path = staged_root / "BUILD-MANIFEST.json"
@@ -293,6 +294,35 @@ def validate_staged(staged_root: Path, release: ReleaseInfo) -> None:
         raise UpdateError("El manifiesto de la descarga no se pudo interpretar.") from error
     if not isinstance(manifest, dict) or manifest.get("application") != "MiRealmBot" or manifest.get("version") != release.version:
         raise UpdateError("La versión incluida en el ZIP no coincide con la Release.")
+    config_source = manifest.get("configuration_source")
+    if config_source == CONFIG_TEMPLATE_PATH.name:
+        required = (CONFIG_TEMPLATE_PATH.name, LEGACY_CONFIG_PATH.name,
+                    "_internal/bot_agent.js", "_internal/autonexus_agent.js")
+        if (staged_root / DEFAULT_CONFIG_PATH.name).exists():
+            raise UpdateError("La Release incluye una configuración personal; no se instalará.")
+        if not all((staged_root / relative).is_file() for relative in required):
+            raise UpdateError("La descarga no contiene todos los archivos del programa.")
+        if ((staged_root / CONFIG_TEMPLATE_PATH.name).read_bytes()
+                != (staged_root / LEGACY_CONFIG_PATH.name).read_bytes()):
+            raise UpdateError("La configuración de compatibilidad no coincide con el ejemplo público.")
+        resources = manifest.get("resource_files")
+        if not isinstance(resources, list) or not resources:
+            raise UpdateError("El manifiesto no conserva los recursos de la aplicación.")
+        for relative in resources:
+            if (not isinstance(relative, str) or not relative or "\\" in relative
+                    or PurePosixPath(relative).is_absolute()
+                    or any(part in ("", ".", "..") or ":" in part for part in relative.split("/"))):
+                raise UpdateError("El manifiesto contiene un recurso sin ruta relativa válida.")
+            if not (staged_root / "_internal" / relative).is_file():
+                raise UpdateError("La descarga no contiene todos los recursos del programa.")
+    elif config_source in (None, "autonexus.example.json") and parse_version(release.version) < (0, 4, 0):
+        # Older release manifests predate configuration_source. Keep their
+        # actual contract without treating an unknown future layout as legacy.
+        if not all((staged_root / relative).is_file() for relative in (
+                "_internal/autonexus_agent.js", LEGACY_CONFIG_PATH.name)):
+            raise UpdateError("La descarga no contiene todos los archivos del programa.")
+    else:
+        raise UpdateError("La Release no declara un formato de configuración compatible.")
 
 
 def _portable_root(app_root: Path) -> Path:

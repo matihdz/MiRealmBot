@@ -1,7 +1,7 @@
 """A bounded, shared recent-history JSONL store for live sessions.
 
-Only the three fixed live-autonexus names and the exact historical runtime
-filename pattern belong to this owner. Other analysis evidence is untouched.
+Only the three MiRealmBot session names and exact historical runtime names
+belong to this owner. Other analysis evidence is untouched.
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ BACKUP_COUNT = 2
 MAX_RECORD_BYTES = 64 * 1024
 TOTAL_LOG_BYTES = MAX_FILE_BYTES * (BACKUP_COUNT + 1)
 MAX_RECORD_DEPTH = 32
+LOG_BASENAME = "mirealmbot-session"
+LEGACY_LOG_FILES = frozenset(("live-autonexus.jsonl", "live-autonexus.1.jsonl", "live-autonexus.2.jsonl"))
 _LEGACY_NAME = re.compile(
     r"live-autonexus-\d{8}T\d{6}\.\d{6}Z-pid([1-9]\d*)-[0-9a-f]{32}\.jsonl")
 
@@ -95,7 +97,7 @@ class BoundedRuntimeLog:
 
     def __init__(self, directory: Path):
         self.directory = Path(directory)
-        self.path = self.directory / "live-autonexus.jsonl"
+        self.path = self.directory / f"{LOG_BASENAME}.jsonl"
         self._handle: BinaryIO | None = None
         self._lock: BinaryIO | None = None
         self._size = 0
@@ -103,7 +105,7 @@ class BoundedRuntimeLog:
         self.legacy_files_retained = 0
         self.directory.mkdir(parents=True, exist_ok=True)
         try:
-            self._lock = (self.directory / "live-autonexus.lock").open("a+b", buffering=0)
+            self._lock = (self.directory / f"{LOG_BASENAME}.lock").open("a+b", buffering=0)
             self._lock.seek(0, os.SEEK_END)
             if self._lock.tell() == 0:
                 self._lock.write(b"\0")
@@ -124,12 +126,12 @@ class BoundedRuntimeLog:
             raise
 
     def _path(self, index: int) -> Path:
-        return self.path if index == 0 else self.path.with_name(f"live-autonexus.{index}.jsonl")
+        return self.path if index == 0 else self.path.with_name(f"{LOG_BASENAME}.{index}.jsonl")
 
     def _remove_inactive_legacy(self) -> None:
         for path in self.directory.iterdir():
-            match = _LEGACY_NAME.fullmatch(path.name)
-            if match is None or not path.is_file() or path.is_symlink():
+            legacy = path.name in LEGACY_LOG_FILES or _LEGACY_NAME.fullmatch(path.name) is not None
+            if not legacy or not path.is_file() or path.is_symlink():
                 continue
             try:
                 # A legacy Python writer on Windows holds a CRT file handle

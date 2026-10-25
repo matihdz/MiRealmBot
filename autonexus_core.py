@@ -120,6 +120,11 @@ class AutoNexus:
         """The configured fraction after native float32 storage."""
         return self._threshold
 
+    @threshold.setter
+    def threshold(self, value: float) -> None:
+        """Apply a new threshold without changing this map's request latch."""
+        self._threshold = _threshold_float32(value)
+
     @property
     def enabled(self) -> bool:
         return self._enabled

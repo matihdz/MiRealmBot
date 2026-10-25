@@ -11,9 +11,9 @@ from runtime_logs import (BACKUP_COUNT, MAX_FILE_BYTES, MAX_RECORD_BYTES,
 
 
 def retained(directory):
-    paths = [directory / "live-autonexus.2.jsonl",
-             directory / "live-autonexus.1.jsonl",
-             directory / "live-autonexus.jsonl"]
+    paths = [directory / "mirealmbot-session.2.jsonl",
+             directory / "mirealmbot-session.1.jsonl",
+             directory / "mirealmbot-session.jsonl"]
     return [json.loads(line) for path in paths if path.exists()
             for line in path.read_bytes().splitlines()]
 
@@ -48,7 +48,7 @@ class RuntimeLogTests(unittest.TestCase):
         for path in paths:
             self.assertLessEqual(path.stat().st_size, MAX_FILE_BYTES)
             self.assertTrue(path.read_bytes().endswith(b"\n"))
-        self.assertEqual((self.directory / "live-autonexus.lock").stat().st_size, 1)
+        self.assertEqual((self.directory / "mirealmbot-session.lock").stat().st_size, 1)
 
     def test_session_reopen_appends_recent_history_without_more_files(self):
         first = self.logger()
@@ -58,6 +58,19 @@ class RuntimeLogTests(unittest.TestCase):
         second.record({"event": "start", "session_id": "two"})
         self.assertEqual([entry["session_id"] for entry in retained(self.directory)], ["one", "two"])
         self.assertEqual(len(list(self.directory.glob("*.jsonl"))), 1)
+
+    def test_old_bounded_store_is_retired_without_removing_similarly_named_evidence(self):
+        old = [self.directory / name for name in (
+            "live-autonexus.jsonl", "live-autonexus.1.jsonl", "live-autonexus.2.jsonl")]
+        for path in old:
+            path.write_bytes(b'{"event":"old session"}\n')
+        unrelated = self.directory / "live-autonexus.research.jsonl"
+        unrelated.write_bytes(b"keep this evidence")
+        logger = self.logger()
+        self.assertEqual(logger.path.name, "mirealmbot-session.jsonl")
+        self.assertEqual(logger.legacy_files_removed, 3)
+        self.assertTrue(all(not path.exists() for path in old))
+        self.assertEqual(unrelated.read_bytes(), b"keep this evidence")
 
     def test_oversized_payload_is_explicitly_omitted_without_blocking_next_record(self):
         logger = self.logger()
@@ -102,14 +115,14 @@ class RuntimeLogTests(unittest.TestCase):
         self.assertEqual([entry["event"] for entry in retained(self.directory)], ["before", "after"])
 
     def test_startup_repairs_incomplete_last_line_without_reinterpreting_evidence(self):
-        current = self.directory / "live-autonexus.jsonl"
+        current = self.directory / "mirealmbot-session.jsonl"
         current.write_bytes(b'{"event":"complete"}\n{"event":"incomplete')
         logger = self.logger()
         logger.record({"event": "new"})
         self.assertEqual([entry["event"] for entry in retained(self.directory)], ["complete", "new"])
 
     def test_startup_enforces_existing_owned_file_bound_and_keeps_complete_recent_lines(self):
-        current = self.directory / "live-autonexus.jsonl"
+        current = self.directory / "mirealmbot-session.jsonl"
         line = (json.dumps({"event": "old", "text": "x" * 1000}) + "\n").encode()
         current.write_bytes(line * (MAX_FILE_BYTES // len(line) + 30))
         logger = self.logger()

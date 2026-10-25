@@ -15,6 +15,29 @@ from unittest.mock import patch
 import zipfile
 
 import update_core as updates
+from app_paths import ensure_default_config
+
+
+# Byte-exact script from the v0.3.1 release build asset:
+# https://github.com/matihdz/MiRealmBot/releases/download/v0.3.1/MiRealmBot-Windows-x64.zip
+# ZIP SHA256: 8c16e46073ec1c1aa536f275b3da2e88d0e8803b8b6ecf873c6e565199cc156d
+LEGACY_WORKER_PATH = Path(__file__).parent / "tests/fixtures/updater_worker_v0_3_1.ps1"
+LEGACY_WORKER_SHA256 = "3d349a5b7558f3acb212fa0a5c66da9c3badbe730d6d32d3678eacd54d87b90e"
+
+
+def modern_bundle_files(version, *, executable=b"synthetic exe"):
+    resources = ["bot_agent.js", "autonexus_agent.js", "autoaim_agent.js",
+                 "debuffs_agent.js", "game_bindings_agent.js", "updater_worker.ps1"]
+    files = {"MiRealmBot.exe": executable, "_internal/python312.dll": b"dll",
+             "mirealmbot.example.json": b'{"threshold":0.9}',
+             "autonexus.json": b'{"threshold":0.9}',
+             "BUILD-MANIFEST.json": json.dumps({
+                 "application": "MiRealmBot", "version": version,
+                 "configuration_source": "mirealmbot.example.json",
+                 "resource_files": resources,
+             }).encode()}
+    files.update({"_internal/" + name: b"test resource; never executed" for name in resources})
+    return files
 
 
 def release_payload(version="0.3.0", archive=b"download"):
@@ -143,6 +166,56 @@ class ArchiveTests(unittest.TestCase):
             with self.assertRaisesRegex(updates.UpdateError, "no coincide"):
                 updates.validate_staged(staged, release)
 
+    def test_modern_layout_requires_public_template_compatibility_and_declared_resources(self):
+        release = updates.parse_release(release_payload("0.4.0"))
+        with tempfile.TemporaryDirectory() as folder:
+            staged = Path(folder)
+            for relative, data in modern_bundle_files(release.version).items():
+                target = staged / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            updates.validate_staged(staged, release)
+            for relative in ("mirealmbot.example.json", "autonexus.json", "_internal/bot_agent.js",
+                             "_internal/autonexus_agent.js", "_internal/debuffs_agent.js"):
+                with self.subTest(missing=relative):
+                    target = staged / relative
+                    data = target.read_bytes()
+                    target.unlink()
+                    with self.assertRaises(updates.UpdateError):
+                        updates.validate_staged(staged, release)
+                    target.write_bytes(data)
+            manifest_path = staged / "BUILD-MANIFEST.json"
+            original_manifest = manifest_path.read_bytes()
+            for resources in (None, [], ["../outside"], ["/outside"], ["C:outside"],
+                              ["invalid\\windows"], [True]):
+                with self.subTest(resources=resources):
+                    manifest = json.loads(original_manifest)
+                    manifest["resource_files"] = resources
+                    manifest_path.write_text(json.dumps(manifest))
+                    with self.assertRaises(updates.UpdateError):
+                        updates.validate_staged(staged, release)
+            manifest_path.write_bytes(original_manifest)
+            (staged / "mirealmbot.json").write_text("personal")
+            with self.assertRaisesRegex(updates.UpdateError, "personal"):
+                updates.validate_staged(staged, release)
+            (staged / "mirealmbot.json").unlink()
+            (staged / "autonexus.json").write_text("personal")
+            with self.assertRaisesRegex(updates.UpdateError, "compatibilidad"):
+                updates.validate_staged(staged, release)
+
+    def test_future_release_cannot_silently_use_an_undeclared_legacy_layout(self):
+        release = updates.parse_release(release_payload("0.4.0"))
+        with tempfile.TemporaryDirectory() as folder:
+            staged = Path(folder)
+            for relative, data in modern_bundle_files(release.version).items():
+                target = staged / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            (staged / "BUILD-MANIFEST.json").write_text(json.dumps({
+                "application": "MiRealmBot", "version": release.version}))
+            with self.assertRaisesRegex(updates.UpdateError, "formato"):
+                updates.validate_staged(staged, release)
+
 
 class PreparationTests(unittest.TestCase):
     # These tests simulate an installation and its next release. Neither side
@@ -156,10 +229,7 @@ class PreparationTests(unittest.TestCase):
     def make_bundle(self):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
-            files = {"MiRealmBot.exe": b"synthetic exe", "_internal/python312.dll": b"dll",
-                     "_internal/autonexus_agent.js": b"agent", "autonexus.json": b"{}",
-                     "BUILD-MANIFEST.json": json.dumps({"application": "MiRealmBot",
-                                                        "version": self.RELEASE_VERSION}).encode()}
+            files = modern_bundle_files(self.RELEASE_VERSION)
             for name, content in files.items():
                 archive.writestr("MiRealmBot/" + name, content)
         data = stream.getvalue()
@@ -230,25 +300,28 @@ class WindowsTransactionTests(unittest.TestCase):
         (self.app / "_internal").mkdir()
         (self.app / "_internal/obsolete.dll").write_text("old library")
         (self.app / "autonexus.json").write_text('{"threshold":0.55,"personal":true}')
+        self.canonical_bytes = b'\xef\xbb\xbf{\r\n  "threshold":0.42,"autonexus_enabled":false,"personal":"canonical"\r\n}\r\n'
+        (self.app / "mirealmbot.json").write_bytes(self.canonical_bytes)
+        (self.app / "mirealmbot.example.json").write_text("old public template")
         (self.app / "analysis").mkdir()
         (self.app / "analysis/personal.jsonl").write_text("private log")
         (self.app / "my-notes.txt").write_text("personal notes")
         self.workspace = self.root / ".MiRealmBot-update-test"
         self.staged = self.workspace / "staged/MiRealmBot"
         self.staged.mkdir(parents=True)
-        (self.staged / "MiRealmBot.exe").write_bytes(b"not a real executable")
-        (self.staged / "_internal").mkdir()
+        for relative, data in modern_bundle_files("0.4.0", executable=b"not a real executable").items():
+            target = self.staged / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         (self.staged / "_internal/current.dll").write_text("new library")
-        (self.staged / "autonexus.json").write_text('{"threshold":0.9}')
-        (self.staged / "BUILD-MANIFEST.json").write_text('{"application":"MiRealmBot","version":"0.3.0"}')
         self.plan = {"format": 1, "app_root": str(self.app), "workspace": str(self.workspace),
                      "staged_root": str(self.staged), "backup_root": str(self.root / "MiRealmBot.backup-test"),
-                     "version": "0.3.0", "parent_pid": 0, "parent_started_ticks": 0, "restart": False}
+                     "version": "0.4.0", "parent_pid": 0, "parent_started_ticks": 0, "restart": False}
 
-    def run_worker(self):
+    def run_worker(self, worker=None):
         plan_path = self.workspace / "plan.json"
         plan_path.write_text(json.dumps(self.plan), encoding="utf-8")
-        worker = Path(__file__).with_name("updater_worker.ps1")
+        worker = worker or Path(__file__).with_name("updater_worker.ps1")
         result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                  "-File", str(worker), "-Plan", str(plan_path)], capture_output=True, text=True, timeout=15)
         report = json.loads((self.workspace / "result.json").read_text(encoding="utf-8-sig"))
@@ -258,6 +331,8 @@ class WindowsTransactionTests(unittest.TestCase):
         self.assertEqual((self.app / "MiRealmBot.exe").read_bytes(), b"old executable")
         self.assertTrue((self.app / "_internal/obsolete.dll").is_file())
         self.assertEqual((self.app / "autonexus.json").read_text(), '{"threshold":0.55,"personal":true}')
+        self.assertEqual((self.app / "mirealmbot.json").read_bytes(), self.canonical_bytes)
+        self.assertEqual((self.app / "mirealmbot.example.json").read_text(), "old public template")
         self.assertEqual((self.app / "analysis/personal.jsonl").read_text(), "private log")
 
     def test_complete_replacement_preserves_config_logs_extras_and_whole_backup(self):
@@ -267,18 +342,49 @@ class WindowsTransactionTests(unittest.TestCase):
         self.assertFalse((self.app / "_internal/obsolete.dll").exists())
         self.assertTrue((self.app / "_internal/current.dll").exists())
         self.assertEqual((self.app / "autonexus.json").read_text(), '{"threshold":0.55,"personal":true}')
+        self.assertEqual((self.app / "mirealmbot.json").read_bytes(), self.canonical_bytes)
+        self.assertEqual((self.app / "mirealmbot.example.json").read_bytes(), b'{"threshold":0.9}')
+        self.assertEqual(ensure_default_config(root=self.app).read_bytes(), self.canonical_bytes)
+        self.assertEqual(list(self.app.glob("autonexus.json.migration.*.bak")), [])
         self.assertEqual((self.app / "analysis/personal.jsonl").read_text(), "private log")
         self.assertEqual((self.app / "my-notes.txt").read_text(), "personal notes")
         backup = Path(report["backup_root"])
         self.assertEqual((backup / "MiRealmBot.exe").read_bytes(), b"old executable")
         self.assertTrue((backup / "_internal/obsolete.dll").exists())
+        self.assertEqual((backup / "mirealmbot.json").read_bytes(), self.canonical_bytes)
+        self.assertEqual((backup / "autonexus.json").read_text(), '{"threshold":0.55,"personal":true}')
+        self.assertEqual((backup / "mirealmbot.example.json").read_text(), "old public template")
+
+    def test_actual_031_worker_upgrade_then_first_launch_migrates_legacy_bytes_once(self):
+        # A 0.3.1 installation has only the older configuration name. The new
+        # release must not preseed canonical settings and hide the user's data.
+        (self.app / "mirealmbot.json").unlink()
+        (self.app / "mirealmbot.example.json").unlink()
+        legacy = b'\xef\xbb\xbf{\r\n  "threshold":0.61,"unknown":"keep exact bytes"\r\n}\r\n'
+        (self.app / "autonexus.json").write_bytes(legacy)
+        self.assertEqual(hashlib.sha256(LEGACY_WORKER_PATH.read_bytes()).hexdigest(), LEGACY_WORKER_SHA256)
+        self.assertFalse((self.staged / "mirealmbot.json").exists())
+        code, report = self.run_worker(LEGACY_WORKER_PATH)
+        self.assertEqual(code, 0, report)
+        self.assertFalse((self.app / "mirealmbot.json").exists())
+        self.assertEqual((self.app / "mirealmbot.example.json").read_bytes(), b'{"threshold":0.9}')
+        migrated = ensure_default_config(root=self.app)
+        self.assertEqual(migrated.name, "mirealmbot.json")
+        self.assertEqual(migrated.read_bytes(), legacy)
+        self.assertEqual((self.app / "autonexus.json").read_bytes(), legacy)
+        backups = list(self.app.glob("autonexus.json.migration.*.bak"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), legacy)
+        self.assertEqual(ensure_default_config(root=self.app), migrated)
+        self.assertEqual(list(self.app.glob("autonexus.json.migration.*.bak")), backups)
+        self.assertEqual((Path(report["backup_root"]) / "autonexus.json").read_bytes(), legacy)
 
     def test_failed_new_executable_rolls_back_original_tree(self):
-        # The synthetic EXE cannot start. Use a missing executable path instead
-        # of showing a test error dialog (worker -restart false remains headless).
+        # Force a failure after both moves without launching any executable or
+        # showing an OS error dialog. The worker's normal rollback runs in full.
         script = Path(__file__).with_name("updater_worker.ps1").read_text(encoding="utf-8")
         injected = self.workspace / "forced-start-failure.ps1"
-        injected.write_text(script.replace("if ($planData.restart) {", "if ($true) {", 1), encoding="utf-8")
+        injected.write_text(script.replace("if ($planData.restart) {", "if ($true) { throw 'synthetic restart failure';", 1), encoding="utf-8")
         plan_path = self.workspace / "plan.json"
         plan_path.write_text(json.dumps(self.plan), encoding="utf-8")
         result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -287,6 +393,8 @@ class WindowsTransactionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, report)
         self.assertTrue(report["rollback"], report)
         self.assert_original()
+        self.assertTrue((self.workspace / "failed-new-installation/MiRealmBot.exe").is_file())
+        self.assertFalse(Path(self.plan["backup_root"]).exists())
 
     def test_wrong_process_identity_never_changes_files(self):
         self.plan.update(parent_pid=__import__("os").getpid(), parent_started_ticks=1)
@@ -335,7 +443,8 @@ class WindowsTransactionTests(unittest.TestCase):
         child_code = (
             "import json,os,sys; from pathlib import Path; from update_core import _current_process_ticks; "
             "print(json.dumps({'pid':os.getpid(),'ticks':str(_current_process_ticks())}),flush=True); sys.stdin.readline(); "
-            "root=Path(sys.argv[1]); (root/'autonexus.json').write_text('late personal config'); "
+            "root=Path(sys.argv[1]); (root/'autonexus.json').write_text('late legacy config'); "
+            "(root/'mirealmbot.json').write_text('late canonical config'); "
             "(root/'analysis'/'personal.jsonl').write_text('late log tail')"
         )
         parent = subprocess.Popen([sys.executable, "-B", "-c", child_code, str(self.app)],
@@ -366,7 +475,9 @@ class WindowsTransactionTests(unittest.TestCase):
         report = json.loads((self.workspace / "result.json").read_text(encoding="utf-8-sig"))
         self.assertEqual(worker.returncode, 0, str(report) + stdout + stderr)
         self.assertTrue(report["ok"], report)
-        self.assertEqual((self.app / "autonexus.json").read_text(), "late personal config")
+        self.assertEqual((self.app / "autonexus.json").read_text(), "late legacy config")
+        self.assertEqual((self.app / "mirealmbot.json").read_text(), "late canonical config")
+        self.assertEqual((self.app / "mirealmbot.example.json").read_bytes(), b'{"threshold":0.9}')
         self.assertEqual((self.app / "analysis/personal.jsonl").read_text(), "late log tail")
         for _ in range(20):
             if (self.app / "restarted.txt").is_file():

@@ -4,6 +4,7 @@ analysis/
 build/
 dist/
 autonexus.json
+mirealmbot.json
 portable-self-test.json
 *.pyc
 *.log

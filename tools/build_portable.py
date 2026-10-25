@@ -26,12 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_SOURCES = (
     "app_paths.py", "autonexus_core.py", "autonexus_controller.py",
     "damage_prediction.py", "windows_nexus.py", "probe_game.py",
-    "live_autonexus.py", "client_ui.py", "runtime_logs.py",
+    "bot_runtime.py", "client_ui.py", "runtime_logs.py", "runtime_control.py",
     "app_version.py", "update_core.py", "client_updates.py",
-    "autoaim_settings.py", "game_settings.py",
+    "autoaim_settings.py", "game_settings.py", "debuffs_settings.py",
 )
 RESOURCE_FILES = (
-    "autonexus_agent.js",
+    "bot_agent.js", "autonexus_agent.js", "debuffs_agent.js",
     "updater_worker.ps1",
     "game_bindings_agent.js", "autoaim_agent.js",
 )
@@ -43,7 +43,7 @@ PINNED_PACKAGES = {
     "pywin32-ctypes": "0.2.3", "setuptools": "84.2.1",
 }
 REQUIRED_PAYLOAD = (
-    "MiRealmBot.exe", "autonexus.json", "LEEME-PRIMERO.txt", "docs/USO.md",
+    "MiRealmBot.exe", "mirealmbot.example.json", "autonexus.json", "LEEME-PRIMERO.txt", "docs/USO.md",
     "THIRD-PARTY-NOTICES.txt", "licenses/Python-LICENSE.txt",
     "licenses/Frida-COPYING.txt", "licenses/PyInstaller-COPYING.txt",
     "licenses/Tk-license.terms", "licenses/Tcl-8.6.15.txt", "licenses/LGPL-2.0.txt",
@@ -56,6 +56,7 @@ FORBIDDEN_NAMES = {
     "gameassembly.dll", "librb.dll", "realmbot_exalted.exe",
     "global-metadata.dat", "rotmg exalt.exe", "autonexus.example.json",
     "replay_autonexus.py", "demo-combat.jsonl",
+    "mirealmbot.json", "live_autonexus.py",
 }
 
 
@@ -135,8 +136,9 @@ def validate_distribution(app: Path) -> None:
     missing = [relative for relative in REQUIRED_PAYLOAD if not (app / relative).is_file()]
     if missing:
         raise RuntimeError(f"La descarga está incompleta: {missing}")
-    config_bytes = (app / "autonexus.json").read_bytes()
-    if config_bytes != (ROOT / "autonexus.example.json").read_bytes():
+    config_bytes = (ROOT / "mirealmbot.example.json").read_bytes()
+    if any((app / name).read_bytes() != config_bytes
+           for name in ("mirealmbot.example.json", "autonexus.json")):
         raise RuntimeError("La descarga debe usar la configuración pública de ejemplo.")
     unexpected = []
     for path in app.rglob("*"):
@@ -182,7 +184,7 @@ def build(build_id: str) -> dict:
     (source / "bundle-resources.json").write_text(
         json.dumps(RESOURCE_FILES, ensure_ascii=False) + "\n", encoding="utf-8")
     shutil.copyfile(ROOT / "packaging/launcher.py", source / "launcher.py")
-    for relative in DOCUMENT_FILES + ("autonexus.example.json",):
+    for relative in DOCUMENT_FILES + ("mirealmbot.example.json",):
         if not (ROOT / relative).is_file():
             raise FileNotFoundError(f"Falta {relative}")
     environment = os.environ.copy()
@@ -199,7 +201,11 @@ def build(build_id: str) -> dict:
     if result.returncode:
         raise RuntimeError(f"PyInstaller falló ({result.returncode}); consulta build/{build_id}/pyinstaller.log")
     app = output / "MiRealmBot"
-    shutil.copyfile(ROOT / "autonexus.example.json", app / "autonexus.json")
+    copy_relative(ROOT, app, "mirealmbot.example.json")
+    # Installed <=0.3.1 updaters require this name and copy the user's older
+    # configuration over it. The canonical file is created by migration on
+    # first launch, so it must never be preseeded by a release ZIP.
+    shutil.copyfile(ROOT / "mirealmbot.example.json", app / "autonexus.json")
     for relative in DOCUMENT_FILES:
         copy_relative(ROOT, app, relative)
     if (ROOT / "LICENSE").is_file():
@@ -220,7 +226,7 @@ def build(build_id: str) -> dict:
         "source_files": {relative: sha256(source / relative) for relative in selected},
         "resource_files": list(RESOURCE_FILES),
         "launcher_sha256": sha256(source / "launcher.py"),
-        "configuration_source": "autonexus.example.json",
+        "configuration_source": "mirealmbot.example.json",
         "configuration_sha256": sha256(app / "autonexus.json"),
         "files": {path.relative_to(app).as_posix(): {"sha256": sha256(path), "bytes": path.stat().st_size}
                   for path in sorted(app.rglob("*")) if path.is_file()},

@@ -8,5 +8,5 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-".venv\Scripts\python.exe" -u -B live_autonexus.py %*
+".venv\Scripts\python.exe" -u -B bot_runtime.py --active %*
 pause

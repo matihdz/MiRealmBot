@@ -2,3 +2,5 @@
 packaging/licenses/OpenSSL-3.0.16-* -text
 # The upstream Authors heading uses seven '=' characters, not a merge marker.
 packaging/licenses/OpenSSL-3.0.16-AUTHORS.md conflict-marker-size=32
+# Preserve the actual updater used by the historical-client regression.
+tests/fixtures/updater_worker_v0_3_1.ps1 -text

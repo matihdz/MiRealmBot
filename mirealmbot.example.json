@@ -1,4 +1,5 @@
 {
+  "autonexus_enabled": true,
   "threshold": 0.90,
   "use_state_filters": false,
   "prediction_enabled": true,
@@ -12,6 +13,11 @@
     "activation": "autofire",
     "extrapolation": 302.0,
     "mouse_radius": 4.0
+  },
+  "debuffs": {
+    "enabled": false,
+    "confuse": true,
+    "quiet": false
   },
   "excluded_maps": ["Nexus"],
   "gameassembly_sha256": "c4f87cde09d713be23c96a5c17774bdbd65e36cd4a4c6fb017759b24daea01cb"

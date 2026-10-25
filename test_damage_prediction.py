@@ -6,7 +6,7 @@ import unittest
 
 from autonexus_controller import Controller, HealthFrame, validate_frame
 from autonexus_core import Action, AutoNexus
-from live_autonexus import TelemetryConsumer, load_config
+from bot_runtime import TelemetryConsumer, load_config
 
 
 def frame(hp=100, map_id="epoch:1", **changes):

@@ -4,24 +4,28 @@
 
 Requisitos de desarrollo: Windows x64, Python 3.12 x64 y el juego instalado con su launcher oficial. Las personas que descargan el ZIP portable no necesitan este entorno.
 
-Puedes ejecutar `Preparar entorno.bat` para crear `.venv`, instalar las dependencias y copiar `autonexus.example.json` a `autonexus.json` si aún no existe. Después abre `MiRealmBot.bat`.
+Puedes ejecutar `Preparar entorno.bat` para crear `.venv`, instalar las dependencias e inicializar o migrar la configuración mediante `app_paths.ensure_default_config`. Después abre `MiRealmBot.bat`.
 
 Equivalente en PowerShell, desde la raíz:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item autonexus.example.json autonexus.json
+.\.venv\Scripts\python.exe -B -c "from app_paths import ensure_default_config; ensure_default_config()"
 .\.venv\Scripts\python.exe -B client_ui.py
 ```
 
-El comando de copia es para un checkout nuevo; conserva tu configuración existente si ya la tienes. La interfaz siempre abre sin iniciar una sesión con el juego.
+La inicialización conserva la configuración existente y migra `autonexus.json` cuando aún no existe `mirealmbot.json`. La interfaz siempre abre sin iniciar una sesión con el juego.
 
 ## Configuración e interfaz
 
-`app_version.py` comparte la versión entre ventana, constructor y actualizador. Hay cuatro pestañas: Juego en vivo, AutoNexus, AutoAim y Actualizaciones. Desde 0.3.1, Juego en vivo sólo ofrece Iniciar bot y Detener; al pulsar Iniciar bot llama al runtime con `active=True`. Abrir la interfaz deja la sesión detenida. Las configuraciones de módulo se guardan sin iniciar el runtime; se bloquean durante la sesión y la limpieza. `ConfigDraft` posee los valores editables y los valida juntos; el worker recibe una instantánea inmutable.
+`app_version.py` comparte la versión entre ventana, constructor y actualizador. Hay cinco pestañas: Juego en vivo, AutoNexus, AutoAim, Debuffs y Actualizaciones. Juego en vivo sólo ofrece Iniciar bot y Detener; al pulsar Iniciar bot llama a `bot_runtime.run_runtime` con `active=True`. Abrir la interfaz deja la sesión detenida. `ConfigDraft` posee los valores editables y los valida juntos. El guardado automático espera 500 ms entre ediciones; sólo persiste instantáneas válidas y retiene un respaldo `.bak` anterior.
 
-La observación se conserva para desarrollo mediante `live_autonexus.py`: sin `--active` observa y con `--active` habilita la intervención. No es una opción del cliente público. Por ejemplo, con el juego abierto, `.\.venv\Scripts\python.exe -B live_autonexus.py --duration 30` recoge lecturas durante 30 segundos sin enviar teclas ni modificar la puntería.
+`RuntimeControl` transporta únicamente la última revisión pendiente, sin acceso del worker a variables Tk. El runtime configura los agentes y confirma `config_applied` sólo tras el ACK. La interfaz distingue el borrador guardado de la instantánea aplicada. Los hooks se instalan de forma perezosa una vez por sesión y consultan sus opciones actuales; cambiar valores no reinicia la sesión, los IDs de eventos, la secuencia o el intento único de Nexus por mapa. Apagar todos los módulos finaliza normalmente; un fallo de configuración nativa produce error y limpieza.
+
+`autonexus_enabled` es un booleano independiente, `true` si falta en configuraciones antiguas. La habilitación efectiva exige tanto esa opción como una tecla Nexus reconocida; una lectura de tecla posterior nunca vuelve a activar un módulo apagado. La predicción se instala únicamente si AutoNexus y predicción están habilitados. AutoAim y Debuffs no dependen de la tecla Nexus. Una configuración con todos los módulos apagados se puede guardar, pero no iniciar.
+
+La observación se conserva para desarrollo mediante `bot_runtime.py`: sin `--active` observa y con `--active` habilita la intervención. No es una opción del cliente público. Por ejemplo, con el juego abierto, `.\.venv\Scripts\python.exe -B bot_runtime.py --duration 30` recoge lecturas durante 30 segundos sin enviar teclas ni modificar la puntería.
 
 La configuración de ejemplo mantiene AutoNexus en 90 %, predicción activada y `detect_game_keys=true`. AutoAim comienza desactivado, con `mode="close_to_mouse"`, `activation="autofire"`, `extrapolation=302` y `mouse_radius=4`.
 
@@ -31,11 +35,15 @@ AutoAim selecciona cerca del cursor dentro del radio en unidades del mundo. La e
 
 `autoaim.prioritize_bosses` y `autoaim.ignore_walls` son booleanos independientes, ambos `false` por defecto. Se descartan murallas antes de aplicar la prioridad de boss, conservando el radio y resolviendo por distancia al cursor. Boss procede de `ObjectProperties.HealthBarBossElement`, con cobertura limitada a enemigos que lo tienen. Murallas usa las clases `CaveWall`, `ConnectedWall`, `Wall` y `DoubleWall`; no se deriva de vida, tamaño o nombre.
 
+`debuffs_settings.py` posee las opciones de Debuffs. El módulo empieza desactivado, Confuse seleccionado y Quiet desmarcado. `quiet:true` se rechaza con una razón explícita porque no hay una ruta verificada que evite sus efectos sobre MP y habilidades. El módulo sólo cuenta como habilitado si `has_protection` confirma una selección disponible.
+
+REA identificó en el original la limpieza del bit 7 de condiciones del jugador local. La implementación propia usa una ruta más estrecha del perfil actual: el getter booleano `KDDCMDNLLKF` (RVA `0x777aa0`) sólo puede cambiar a falso al volver a la llamada de movimiento verificada (`0x155f1fe`), para el receptor local, con identidad, mapa, vigencia y foco válidos. Las firmas y metadatos se verifican antes de instalar el hook. Se revalidan al retornar; no se modifican máscara persistente, iconos, MP ni red. Los IDs de Evidence estática figuran en `debuffs_agent.js`. Las pruebas nativas son simuladas y no acreditan una prueba real de Confuse.
+
 La pestaña Actualizaciones consulta Releases públicas de GitHub. El inicio normal programa la primera consulta en segundo plano aproximadamente 1,5 segundos después de abrir la ventana; descargar e instalar requieren sus botones. Desde fuentes se pueden consultar novedades y abrir la descarga. La sustitución y el reinicio corresponden al portable, una vez detenida la sesión y confirmada su limpieza.
 
 ## Historial acotado
 
-`runtime_logs.py` posee el formato, la cuota y la rotación del registro. Conserva `live-autonexus.jsonl` y dos archivos rotados, como máximo 1 MiB por archivo y 3 MiB combinados entre sesiones. Serializa entradas completas de hasta 64 KiB; las mayores dejan un marcador de omisión. Un bloqueo de archivo evita escritores simultáneos dentro de la misma instalación.
+`runtime_logs.py` posee el formato, la cuota y la rotación del registro. Conserva `mirealmbot-session.jsonl` y dos archivos rotados, como máximo 1 MiB por archivo y 3 MiB combinados entre sesiones. Serializa entradas completas de hasta 64 KiB; las mayores dejan un marcador de omisión. Un bloqueo de archivo evita escritores simultáneos dentro de la misma instalación.
 
 Al abrir el historial se retiran únicamente nombres que coinciden con el formato antiguo exacto de logs del runtime. Windows conserva archivos ocupados; la limpieza se reintenta en otro inicio. Otros archivos de análisis no pertenecen a este almacén. Los respaldos del actualizador pueden retener historial anterior y quedan fuera de su cuota.
 
@@ -45,7 +53,7 @@ Un fallo de apertura, escritura o cierre del log desactiva el registro en disco 
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest -q
-node --test test_autoaim_agent.cjs
+node --test test_autoaim_agent.cjs test_debuffs_agent.cjs test_bot_agent.cjs
 ```
 
 Las pruebas de interfaz usan un runtime falso y Tk oculto. Las del historial usan carpetas temporales para verificar cuotas, rotación, limpieza de nombres antiguos y fallos de disco. No envían teclas ni se adjuntan al juego.
@@ -63,9 +71,9 @@ Usa Python 3.12 x64 en Windows y el entorno virtual. Instala el conjunto de cons
 
 El script no instala software. Reserva directorios nuevos bajo `build/` y `dist/`; no sustituye construcciones previas. El resultado es `dist/mi-construccion/MiRealmBot-Windows-x64.zip`, con un archivo de sumas SHA256 y un manifiesto de los archivos incluidos.
 
-Se usa PyInstaller en modo carpeta, con ventana y sin UPX. Los recursos viven en `_internal`; `autonexus.json` y los registros se guardan junto al ejecutable.
+Se usa PyInstaller en modo carpeta, con ventana y sin UPX. Los recursos viven en `_internal`; `mirealmbot.json` y los registros se guardan junto al ejecutable.
 
-El constructor copia una lista explícita de código y recursos. La configuración sale de `autonexus.example.json`, nunca de la configuración personal. No incluye `analysis/`, `.venv/`, registros, archivos del juego ni de otro bot. Incluye las licencias de las dependencias instaladas y los textos que figuran en `packaging/`.
+El constructor copia una lista explícita de código y recursos. La configuración sale de `mirealmbot.example.json`, nunca de la configuración personal. Publica ese ejemplo y una copia idéntica `autonexus.json` para el actualizador antiguo, pero nunca publica `mirealmbot.json`. También conserva `autonexus_agent.js` como marcador de compatibilidad sin implementación: el código real vive en `bot_agent.js`. Ambos nombres antiguos son requeridos por el validador ya instalado en 0.3.1. No incluye `analysis/`, `.venv/`, registros, archivos del juego ni de otro bot. Incluye las licencias de las dependencias instaladas y los textos que figuran en `packaging/`.
 
 ## Comprobar el ejecutable construido
 
@@ -75,7 +83,7 @@ Extrae el ZIP completo en otra carpeta. Ejecuta allí:
 .\MiRealmBot.exe --portable-self-test
 ```
 
-Esta comprobación valida el manifiesto de recursos, Frida, Tkinter, configuración, las cuatro pestañas, los controles de inicio/detención y las constantes del historial. Mantiene la ventana oculta y bloquea el runtime. No consulta las preferencias del juego, no se adjunta al juego, no envía teclas, no accede a la red ni ejecuta actualizaciones. Guarda el resultado en `analysis/portable-self-test.json`.
+Esta comprobación valida el manifiesto de recursos, Frida, Tkinter, configuración, las cinco pestañas, los controles de inicio/detención y las constantes del historial. Mantiene la ventana oculta y bloquea el runtime. No consulta las preferencias del juego, no se adjunta al juego, no envía teclas, no accede a la red ni ejecuta actualizaciones. Guarda el resultado en `analysis/portable-self-test.json`.
 
 La compatibilidad con el juego, el aspecto de una ventana visible y el funcionamiento en otro equipo requieren comprobaciones distintas. Documenta por separado la evidencia del perfil, del punto de enganche y de cualquier prueba real realizada.
 

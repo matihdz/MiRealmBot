@@ -46,12 +46,14 @@ try {
     }
     # Replace release-owned files as a complete tree. Keep local configuration,
     # logs and unknown top-level personal files; the entire old tree is backed up.
-    $releaseOwned = @('MiRealmBot.exe', '_internal', 'BUILD-MANIFEST.json', 'autonexus.json',
+    $releaseOwned = @('MiRealmBot.exe', '_internal', 'BUILD-MANIFEST.json',
+        'mirealmbot.example.json', 'mirealmbot.json', 'autonexus.json',
         'LEEME-PRIMERO.txt', 'docs', 'licenses', 'THIRD-PARTY-NOTICES.txt', 'LICENSE')
+    $personalConfigs = @('mirealmbot.json', 'autonexus.json')
     foreach ($item in Get-ChildItem -LiteralPath $appRoot -Force) {
-        if ($item.Name -eq 'autonexus.json' -or $releaseOwned -notcontains $item.Name) {
+        if ($personalConfigs -contains $item.Name -or $releaseOwned -notcontains $item.Name) {
             $destination = [IO.Path]::Combine($staged, $item.Name)
-            if ($item.Name -ne 'autonexus.json' -and (Test-Path -LiteralPath $destination)) {
+            if ($personalConfigs -notcontains $item.Name -and (Test-Path -LiteralPath $destination)) {
                 throw ('A personal file conflicts with the new release: ' + $item.Name)
             }
             Copy-Item -LiteralPath $item.FullName -Destination $destination -Recurse -Force

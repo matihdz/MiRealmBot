@@ -37,10 +37,9 @@ function chooseAutoAimTarget(candidates, cursor, radius, extrapolation, prioriti
     return chosen;
 }
 
-function createAutoAimBridge(context) {
-    const { module, api, resolve, instanceField, typedMethod, verifyBytes,
-        validObject, ownedHooks, options, isRunning, getAssociation, playerClass, worldClass } = context;
-    if (options.mode !== 'close_to_mouse' || options.activation !== 'autofire' ||
+function validateAutoAimOptions(options) {
+    if (options === null || typeof options !== 'object' || Array.isArray(options) ||
+        options.mode !== 'close_to_mouse' || options.activation !== 'autofire' ||
         typeof options.enabled !== 'boolean' || typeof options.active !== 'boolean' ||
         typeof options.prioritize_bosses !== 'boolean' ||
         typeof options.ignore_walls !== 'boolean' ||
@@ -48,6 +47,14 @@ function createAutoAimBridge(context) {
         !Number.isFinite(options.mouse_radius) || options.mouse_radius <= 0) {
         throw Error('Invalid Close to Mouse options.');
     }
+    return Object.assign({}, options);
+}
+
+function createAutoAimBridge(context) {
+    const { module, api, resolve, instanceField, typedMethod, verifyBytes,
+        validObject, ownedHooks, isRunning, getAssociation, playerClass, worldClass } = context;
+    const options = validateAutoAimOptions(context.options);
+    let installed = false;
     const inputClass = resolve('Assembly-CSharp.dll', 'DecaGames.RotMG.Managers.Options', 'InputManager');
     const cameraManagerClass = resolve('Assembly-CSharp.dll', 'DecaGames.RotMG.Managers', 'CameraManager');
     const cameraClass = resolve('UnityEngine.CoreModule.dll', 'UnityEngine', 'Camera');
@@ -133,6 +140,7 @@ function createAutoAimBridge(context) {
         return foregroundPid.readU32() === Process.id;
     }
     function current() {
+        if (!options.enabled) return null;
         if (!isRunning() || error !== null) return null;
         const association = getAssociation();
         const age = association === null ? Infinity : Date.now() - association.gui_seen_at;
@@ -241,7 +249,7 @@ function createAutoAimBridge(context) {
             candidates: 0, projections: 0, redirects: 0, captured_at: null };
     }
     function install() {
-        if (!options.enabled) return;
+        if (!options.enabled || installed) return;
         ownedHooks.push(Interceptor.attach(ptr(dispatch.native_address), {
             onEnter(args) {
                 this.aimScope = null;
@@ -316,8 +324,16 @@ function createAutoAimBridge(context) {
                 } catch (caught) { fail(caught); }
             }
         }));
+        installed = true;
     }
     return { install, capture, invalidate,
+        configure(nextOptions) {
+            const next = validateAutoAimOptions(nextOptions);
+            invalidate();
+            Object.assign(options, next);
+            install();
+            this.bindings.writes = options.enabled && options.active ? 'Scoped camera return stack x/y only' : 'none';
+        },
         bindings: { fields, dispatch, camera, code_guards: guards,
             boss_classification: {
                 source: 'health_bar_boss_marker', field: 'ObjectProperties.HealthBarBossElement',
