@@ -157,7 +157,6 @@ class App:
         self.applied_config = None
         self.applied_key = None
         self.nexus_binding_status = None
-        self.live_active = False
         self.last_error = None
         self.status_var = tk.StringVar(root, "Detenido")
         self.banner_var = tk.StringVar(root)
@@ -165,7 +164,6 @@ class App:
         self.draft_status_var = tk.StringVar(root, "Los cambios se aplican al próximo inicio de sesión.")
         self.nexus_binding_var = tk.StringVar(root)
         self.autofire_binding_var = tk.StringVar(root)
-        self.mode_var = tk.StringVar(root, "observe")
         self.config_widgets = []
         self._style()
         self._build(auto_check_updates, update_service, portable_updates)
@@ -258,11 +256,7 @@ class App:
         p.rowconfigure(5, weight=1)
         controls = ttk.Frame(p, style="Panel.TFrame", padding=(16, 10))
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        self.observe_radio = ttk.Radiobutton(controls, text="Observar", variable=self.mode_var, value="observe", command=self._update_banner)
-        self.active_radio = ttk.Radiobutton(controls, text="Activo", variable=self.mode_var, value="active", command=self._update_banner)
-        self.observe_radio.pack(side="left", padx=(0, 16))
-        self.active_radio.pack(side="left", padx=(0, 25))
-        self.start_button = ttk.Button(controls, text="Iniciar observación", style="Accent.TButton", command=self.start_live)
+        self.start_button = ttk.Button(controls, text="Iniciar bot", style="Accent.TButton", command=self.start_live)
         self.start_button.pack(side="left", padx=(0, 9))
         self.stop_button = ttk.Button(controls, text="Detener", command=self.stop_live, state="disabled")
         self.stop_button.pack(side="left")
@@ -366,7 +360,7 @@ class App:
         self._label(settings, "Prioriza bosses con marcador del juego dentro del radio; sin uno, elige al enemigo más cercano. Ignorar murallas las excluye como objetivos.", style="PanelMuted.TLabel", wraplength=900).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
         info = ttk.Frame(p, style="Panel.TFrame", padding=20)
         info.grid(row=3, column=0, sticky="ew", pady=(14, 0))
-        self._label(info, "Actúa en modo Activo mientras el autofire del juego está encendido; no necesitas mantener una tecla pulsada. Observar calcula sin alterar los disparos.", style="PanelMuted.TLabel", wraplength=900).pack(anchor="w")
+        self._label(info, "Con AutoAim activado, apunta mientras el autofire del juego está encendido; no necesitas mantener una tecla pulsada.", style="PanelMuted.TLabel", wraplength=900).pack(anchor="w")
         self._label(info, textvariable=self.autofire_binding_var, style="PanelMuted.TLabel", wraplength=900).pack(anchor="w", pady=(12, 0))
         self.config_widgets.extend((self.aim_enabled_check, self.prioritize_bosses_check, self.ignore_walls_check, self.extrapolation_input, self.aim_radius_input))
         self._save_controls(p, 4)
@@ -388,8 +382,6 @@ class App:
         for widget in self.config_widgets:
             widget.configure(state="disabled" if locked else "normal")
         self.key_combo.configure(state="readonly" if not locked and not self.draft.detect_game_keys.get() else "disabled")
-        for widget in (self.observe_radio, self.active_radio):
-            widget.configure(state="disabled" if locked else "normal")
         self.start_button.configure(state="normal" if not locked and self.cleanup_complete else "disabled")
         self.stop_button.configure(state="normal" if running and not self.stop_event.is_set() else "disabled")
         if running:
@@ -400,8 +392,6 @@ class App:
         color, background = BLUE, "#192e49"
         if self.runtime_thread is None:
             text = "DETENIDO · INICIA LA SESIÓN DESDE JUEGO EN VIVO"
-        elif not self.live_active:
-            text = "OBSERVANDO EL JUEGO · NO ENVÍA TECLAS NI ALTERA DISPAROS"
         else:
             color, background = AMBER, "#44321f"
             if self.nexus_binding_status == "waiting":
@@ -414,7 +404,6 @@ class App:
                 text += " · AUTOAIM SEGÚN AUTOFIRE"
         self.banner_var.set(text)
         self.banner.configure(background=background, foreground=color)
-        self.start_button.configure(text="Iniciar bot" if self.mode_var.get() == "active" else "Iniciar observación")
 
     def refresh_game_bindings(self):
         if self.runtime_thread is not None or self.closing:
@@ -472,7 +461,6 @@ class App:
         inbox = self.runtime_inbox = RuntimeInbox()
         self._runtime_finished_seen = False
         self.cleanup_complete = False
-        active = self.live_active = self.mode_var.get() == "active"
         self.applied_config = config
         self.applied_key = config.nexus_key
         self.nexus_binding_status = "waiting" if config.detect_game_keys else "manual"
@@ -486,7 +474,7 @@ class App:
 
         def worker():
             try:
-                code = self.runtime_runner(config, active=active, stop_event=stop_event, on_update=inbox.put)
+                code = self.runtime_runner(config, active=True, stop_event=stop_event, on_update=inbox.put)
             except Exception as error:
                 inbox.put({"event": "worker_failure", "error": display_text(error)})
                 code = 1
@@ -565,8 +553,8 @@ class App:
                     self.live_vars["error"].set(display_text(text))
                 self.live_hint_var.set("Sesión cerrada. El juego sigue abierto." if self.cleanup_complete else "La limpieza quedó incompleta. No se permite iniciar otra sesión.")
             elif status == "running":
-                self.status_var.set("Activo" if self.live_active else "Observando")
-                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa en modo Activo cuando el autofire está encendido.")
+                self.status_var.set("Activo")
+                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa cuando está habilitado y el autofire está encendido.")
             elif status == "stopping":
                 self.status_var.set("Deteniendo")
             else:
@@ -610,12 +598,12 @@ class App:
                 self.live_vars["decision"].set("Tecla Nexus no admitida")
                 self.live_hint_var.set("La tecla Nexus no está admitida. Detén la sesión y configura una letra o Control; o desmarca «Leer teclas del juego» en AutoNexus y elige una tecla manual que coincida con el juego.")
             elif binding_status in ("detected", "manual"):
-                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa en modo Activo cuando el autofire está encendido.")
+                self.live_hint_var.set("Vuelve a la ventana del juego. AutoAim actúa cuando está habilitado y el autofire está encendido.")
             focus = record.get("game_foreground")
             self.live_vars["focus"].set("En primer plano" if focus is True else "Vuelve a la ventana del juego" if focus is False else "Sin comprobar")
             delivery = record.get("delivery") or {}
             if delivery.get("status") not in (None, "none"):
-                labels = {"observe_only": "Sólo observación · no se envió la tecla", "key_sent": "Tecla enviada · Nexus sin confirmar",
+                labels = {"observe_only": "Sin intervención · no se envió la tecla", "key_sent": "Tecla enviada · Nexus sin confirmar",
                           "blocked": "Tecla bloqueada · no se reintentará en este mapa", "failed": "Falló el envío de la tecla"}
                 self.live_vars["delivery"].set(labels.get(delivery.get("status"), display_text(delivery.get("status"))))
             aim = record.get("autoaim")
@@ -625,7 +613,7 @@ class App:
                 else:
                     fire = aim.get("autofire")
                     authority = ("Pausado" if aim.get("paused") is True else "Activo" if aim.get("active") is True else
-                                 "Observación · no altera los disparos" if aim.get("active") is False else "Estado sin confirmar")
+                                 "Sin intervención · no altera los disparos" if aim.get("active") is False else "Estado sin confirmar")
                     text = authority + " · autofire " + ("encendido" if fire is True else "apagado" if fire is False else "sin confirmar")
                     if aim.get("target_id") is not None:
                         boss = aim.get("target_is_boss")

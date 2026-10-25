@@ -92,6 +92,19 @@ def portable_self_test() -> int:
             if tabs != ["Juego en vivo", "AutoNexus", "AutoAim", "Actualizaciones"]:
                 raise RuntimeError(f"Las pestañas no corresponden a esta versión: {tabs}")
             app.draft.validate()
+            live_widgets = list(app.live_tab.winfo_children())
+            for widget in live_widgets:
+                live_widgets.extend(widget.winfo_children())
+            start_text = str(app.start_button.cget("text"))
+            start_buttons = [widget for widget in live_widgets
+                             if widget.winfo_class() == "TButton"
+                             and str(widget.cget("text")) == "Iniciar bot"]
+            mode_selector = (any(widget.winfo_class() in ("TRadiobutton", "Radiobutton")
+                                 for widget in live_widgets)
+                             or any(hasattr(app, name) for name in (
+                                 "mode_var", "observe_radio", "active_radio")))
+            if start_text != "Iniciar bot" or len(start_buttons) != 1 or mode_selector:
+                raise RuntimeError("Juego en vivo debe mostrar un único Iniciar bot y ningún selector de modo")
             if root.state() != "withdrawn":
                 raise RuntimeError("La comprobación de interfaz debe permanecer oculta")
             if runtime_called or app.runtime_thread is not None or app.updates_panel.busy:
@@ -114,6 +127,10 @@ def portable_self_test() -> int:
             "ui_title": ui_title,
             "ui_checked_while_hidden": True,
             "ui_starts_stopped": True,
+            "ui_start_button_text": start_text,
+            "ui_start_button_count": len(start_buttons),
+            "ui_mode_selector_present": mode_selector,
+            "runtime_runner_invoked": runtime_called,
             "ui_configuration_validated": True,
             "replay_module_loaded": False,
             "default_runtime_log_limits": {

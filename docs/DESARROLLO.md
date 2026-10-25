@@ -19,7 +19,9 @@ El comando de copia es para un checkout nuevo; conserva tu configuración existe
 
 ## Configuración e interfaz
 
-`app_version.py` comparte la versión entre ventana, constructor y actualizador. En 0.3.0 hay cuatro pestañas: Juego en vivo, AutoNexus, AutoAim y Actualizaciones. El control de sesión pertenece a Juego en vivo. Las configuraciones de módulo se guardan sin iniciar el runtime; se bloquean durante la sesión y la limpieza. `ConfigDraft` posee los valores editables y los valida juntos; el worker recibe una instantánea inmutable.
+`app_version.py` comparte la versión entre ventana, constructor y actualizador. Hay cuatro pestañas: Juego en vivo, AutoNexus, AutoAim y Actualizaciones. Desde 0.3.1, Juego en vivo sólo ofrece Iniciar bot y Detener; al pulsar Iniciar bot llama al runtime con `active=True`. Abrir la interfaz deja la sesión detenida. Las configuraciones de módulo se guardan sin iniciar el runtime; se bloquean durante la sesión y la limpieza. `ConfigDraft` posee los valores editables y los valida juntos; el worker recibe una instantánea inmutable.
+
+La observación se conserva para desarrollo mediante `live_autonexus.py`: sin `--active` observa y con `--active` habilita la intervención. No es una opción del cliente público. Por ejemplo, con el juego abierto, `.\.venv\Scripts\python.exe -B live_autonexus.py --duration 30` recoge lecturas durante 30 segundos sin enviar teclas ni modificar la puntería.
 
 La configuración de ejemplo mantiene AutoNexus en 90 %, predicción activada y `detect_game_keys=true`. AutoAim comienza desactivado, con `mode="close_to_mouse"`, `activation="autofire"`, `extrapolation=302` y `mouse_radius=4`.
 
@@ -73,7 +75,7 @@ Extrae el ZIP completo en otra carpeta. Ejecuta allí:
 .\MiRealmBot.exe --portable-self-test
 ```
 
-Esta comprobación valida el manifiesto de recursos, Frida, Tkinter, configuración, las cuatro pestañas y las constantes del historial. Mantiene la ventana oculta y bloquea el runtime. No consulta las preferencias del juego, no se adjunta al juego, no envía teclas, no accede a la red ni ejecuta actualizaciones. Guarda el resultado en `analysis/portable-self-test.json`.
+Esta comprobación valida el manifiesto de recursos, Frida, Tkinter, configuración, las cuatro pestañas, los controles de inicio/detención y las constantes del historial. Mantiene la ventana oculta y bloquea el runtime. No consulta las preferencias del juego, no se adjunta al juego, no envía teclas, no accede a la red ni ejecuta actualizaciones. Guarda el resultado en `analysis/portable-self-test.json`.
 
 La compatibilidad con el juego, el aspecto de una ventana visible y el funcionamiento en otro equipo requieren comprobaciones distintas. Documenta por separado la evidencia del perfil, del punto de enganche y de cualquier prueba real realizada.
 

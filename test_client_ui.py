@@ -119,6 +119,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.app.notebook.select(), str(self.app.live_tab))
         self.assertEqual(self.root.state(), "withdrawn")
         self.assertIsNone(self.app.runtime_thread)
+        self.assertEqual(self.app.status_var.get(), "Detenido")
         self.assertFalse(self.app.updates_panel.busy)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.settings_calls, 1)
@@ -128,9 +129,13 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(list(Path(self.directory.name).iterdir()), [self.config_path])
         self.assertEqual(self.config_path.read_text(encoding="utf-8"), self.initial_config)
 
-    def test_start_stop_and_mode_controls_exist_only_in_live_page(self):
-        for control in (self.app.start_button, self.app.stop_button, self.app.observe_radio, self.app.active_radio):
+    def test_start_stop_exist_only_in_live_page_and_no_mode_selector_is_exposed(self):
+        for control in (self.app.start_button, self.app.stop_button):
             self.assertTrue(belongs_to(control, self.app.live_tab))
+        self.assertEqual(self.app.start_button.cget("text"), "Iniciar bot")
+        self.assertFalse(any(isinstance(widget, ttk.Radiobutton) for widget in descendants(self.root)))
+        self.assertFalse(hasattr(self.app, "mode_var"))
+        self.assertFalse(hasattr(self.app, "live_active"))
         buttons = [widget for widget in descendants(self.root) if isinstance(widget, ttk.Button)]
         runtime_buttons = [widget for widget in buttons if widget.cget("text").startswith(("Iniciar", "Detener"))]
         self.assertEqual(set(runtime_buttons), {self.app.start_button, self.app.stop_button})
@@ -219,7 +224,6 @@ class ClientTests(unittest.TestCase):
         draft.prioritize_bosses.set(True)
         draft.ignore_walls.set(True)
         draft.extrapolation.set("150")
-        self.app.mode_var.set("active")
         self.assertTrue(self.app.start_live())
         self.pump_until(lambda: self.app.status_var.get() == "Activo")
         config, active = self.calls[0]
@@ -231,7 +235,6 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(config.autoaim.extrapolation, 150)
         for widget in self.app.config_widgets:
             self.assertEqual(str(widget.cget("state")), "disabled")
-        self.assertEqual(str(self.app.observe_radio.cget("state")), "disabled")
         self.assertFalse(self.app.save_parameters())
         draft.threshold.set("10")  # Programmatic edits cannot alter the worker's snapshot.
         self.assertEqual(config.threshold, .6)
@@ -241,7 +244,6 @@ class ClientTests(unittest.TestCase):
     def test_applied_status_stays_visible_while_visiting_configuration_tabs(self):
         self.app.draft.detect_game_keys.set(False)
         self.app.refresh_game_bindings()
-        self.app.mode_var.set("active")
         self.assertTrue(self.app.start_live())
         self.pump_until(lambda: self.app.status_var.get() == "Activo")
         for tab in (self.app.nexus_tab, self.app.aim_tab, self.app.updates_panel):
@@ -253,7 +255,7 @@ class ClientTests(unittest.TestCase):
 
     def test_close_waits_for_real_runtime_cleanup_and_stops_before_destroying_window(self):
         self.assertTrue(self.app.start_live())
-        self.pump_until(lambda: self.app.status_var.get() == "Observando")
+        self.pump_until(lambda: self.app.status_var.get() == "Activo")
         self.app.close()
         self.assertTrue(self.app.stop_event.is_set())
         self.assertIsNotNone(self.app.runtime_thread)
@@ -361,7 +363,6 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(self.app.draft.detect_game_keys.get())
 
     def test_fresh_runtime_bindings_update_applied_key_but_never_edit_locked_draft(self):
-        self.app.mode_var.set("active")
         self.assertTrue(self.app.start_live())
         self.pump_until(lambda: len(self.calls) == 1)
         record = {"event": "telemetry", "nexus_binding_status": "waiting"}
@@ -393,7 +394,7 @@ class ClientTests(unittest.TestCase):
                 text = self.app.live_vars["autoaim"].get()
                 self.assertIn(expected, text)
                 self.assertIn("sin confirmar", text)
-                self.assertIn("Observación", text)
+                self.assertIn("Sin intervención", text)
         self.app._handle_runtime_record({"event": "telemetry", "autoaim": {
             "enabled": True, "active": True, "paused": True, "autofire": True}})
         self.assertIn("Pausado", self.app.live_vars["autoaim"].get())

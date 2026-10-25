@@ -1,6 +1,6 @@
 # MiRealmBot
 
-Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. La versión **0.3.0** organiza las configuraciones por módulo y conserva sólo un historial reciente de la sesión.
+Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. En **0.3.1**, **Iniciar bot** activa directamente los módulos configurados. Las configuraciones están organizadas por módulo y los registros conservan sólo un historial reciente.
 
 **[Descargar MiRealmBot para Windows](https://github.com/matihdz/MiRealmBot/releases/latest)** · [Guía paso a paso](docs/USO.md)
 
@@ -11,18 +11,18 @@ Interfaz local de **AutoNexus y AutoAim para RotMG Exalt en Windows x64**. La ve
 3. Abre el juego mediante su launcher oficial y deja el personaje en Nexus.
 4. En **AutoNexus**, configura el porcentaje de vida, la predicción y la detección de la tecla Nexus. Pulsa **Guardar configuración**.
 5. Si quieres apuntado automático, configura **AutoAim** y guarda.
-6. En **Juego en vivo**, comprueba primero la lectura con **Observar → Iniciar observación**; luego pulsa **Detener**.
-7. Selecciona **Activo → Iniciar bot** y vuelve a la ventana del juego. Mantenla en primer plano.
+6. En **Juego en vivo**, pulsa **Iniciar bot**.
+7. Vuelve a la ventana del juego y mantenla en primer plano.
 
 El ZIP incluye Python, Frida y Tkinter. Conserva la carpeta `_internal` junto al ejecutable. **Source code (zip)** contiene el código para desarrollo; el archivo preparado para usar es **MiRealmBot-Windows-x64.zip**.
 
-Abrir el programa no inicia la protección. **Observar** recoge lecturas sin enviar teclas ni modificar la puntería. **Detener** cierra la sesión y retira los hooks. Para cambiar ajustes durante una sesión, detén el bot, guarda los cambios e inicia de nuevo.
+Abrir el programa deja la sesión detenida. **Iniciar bot** activa AutoNexus y el AutoAim que hayas habilitado. **Detener** cierra la sesión y retira los hooks. Para cambiar ajustes durante una sesión, detén el bot, guarda los cambios e inicia de nuevo.
 
 ## Las cuatro pestañas
 
 | Pestaña | Contenido |
 | --- | --- |
-| **Juego en vivo** | Modo Observar/Activo, inicio y detención del bot, vida, mapa, decisiones y actividad reciente. |
+| **Juego en vivo** | Inicio y detención del bot, vida, mapa, decisiones y actividad reciente. |
 | **AutoNexus** | Porcentaje de salida, predicción de daño y tecla de regreso al Nexus. |
 | **AutoAim** | Activación, Close to Mouse, Extrapolation, radio, prioridad de bosses y filtro de murallas. |
 | **Actualizaciones** | Buscar, descargar e instalar nuevas versiones desde GitHub. |
@@ -37,7 +37,7 @@ La configuración inicial usa **90 %** y predicción de impactos de proyectil ac
 
 ## AutoAim
 
-Empieza desactivado. Marca **Activar AutoAim**, guarda y usa el modo **Activo** de Juego en vivo. **Close to Mouse** elige un enemigo cercano al cursor dentro del radio configurado. Sólo actúa con el autofire del juego encendido y el juego sin pausa; usa la tecla de autofire que tengas configurada en el juego.
+Empieza desactivado. Marca **Activar AutoAim**, guarda y pulsa **Iniciar bot** en Juego en vivo. **Close to Mouse** elige un enemigo cercano al cursor dentro del radio configurado. Sólo actúa con el autofire del juego encendido y el juego sin pausa; usa la tecla de autofire que tengas configurada en el juego.
 
 **Extrapolation** empieza en **302**. Con 0 apunta a la posición actual; valores mayores adelantan según el movimiento del enemigo. La unidad temporal de este coeficiente no está confirmada. **Radio junto al cursor** empieza en **4 unidades del mundo del juego**.
 
@@ -64,7 +64,7 @@ Windows de 64 bits, instalación del launcher oficial y el perfil exacto de Game
 
 La predicción cubre la ruta de impactos de proyectil investigada; terreno y daño continuo no están cubiertos. Los filtros generales de inmunidad siguen sin bindings completos. Sólo intenta una salida por mapa; si la tecla se bloquea, lo muestra y no reintenta automáticamente. El envío de la tecla no garantiza supervivencia ni confirma por sí solo la llegada al Nexus.
 
-La integración carga temporalmente un agente Frida e instala hooks sin cambiar archivos del juego. Requiere el juego abierto. El usuario informó una salida activa satisfactoria en la instalación de desarrollo. Las pruebas de interfaz y registros de 0.3.0 se realizan sin combate; no establecen compatibilidad con otro equipo.
+La integración carga temporalmente un agente Frida e instala hooks sin cambiar archivos del juego. Requiere el juego abierto. El usuario informó una salida activa satisfactoria en la instalación de desarrollo. Las pruebas de la interfaz 0.3.1 se realizan sin combate; no establecen compatibilidad con otro equipo.
 
 ## Desarrollo
 

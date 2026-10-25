@@ -37,7 +37,7 @@ El modo disponible es **Close to Mouse**. Selecciona al enemigo más cercano al 
 
 **Extrapolation** controla el adelanto según el movimiento del enemigo: 0 usa su posición actual y un valor mayor adelanta más. La unidad temporal del coeficiente no está confirmada.
 
-La pestaña muestra la tecla de autofire detectada como información. AutoAim usa el estado de autofire del juego: enciéndelo con tu tecla configurada; no hay que mantener una tecla adicional pulsada. Requiere modo Activo y juego sin pausa.
+La pestaña muestra la tecla de autofire detectada como información. AutoAim usa el estado de autofire del juego: enciéndelo con tu tecla configurada; no hay que mantener una tecla adicional pulsada. Requiere el bot iniciado y el juego sin pausa.
 
 El puente modifica el punto de puntería de la ruta investigada de proyectiles. No mueve el cursor ni enciende autofire o ataques. El usuario confirmó el apuntado activo en el perfil actual; la precisión y la compatibilidad con otro equipo siguen pendientes de medición.
 
@@ -46,19 +46,17 @@ El puente modifica el punto de puntería de la ruta investigada de proyectiles. 
 Todos los controles de sesión están en **Juego en vivo**:
 
 1. Abre RotMG Exalt y deja al personaje en **Nexus**.
-2. Selecciona **Observar → Iniciar observación**. Deben aparecer tu vida y el mapa. Este modo recoge lecturas sin enviar teclas ni modificar la puntería.
-3. Pulsa **Detener** y espera a que finalice la limpieza.
-4. Selecciona **Activo → Iniciar bot** para usar los módulos configurados.
-5. Vuelve a la ventana del juego y mantenla en primer plano. Para AutoAim, enciende el autofire del juego y acerca el cursor al objetivo.
-6. Usa **Detener** en MiRealmBot para cerrar toda la sesión y retirar la integración.
+2. Pulsa **Iniciar bot**. Inicia directamente AutoNexus y el AutoAim que hayas habilitado; deben aparecer tu vida y el mapa.
+3. Vuelve a la ventana del juego y mantenla en primer plano. Para AutoAim, enciende el autofire del juego y acerca el cursor al objetivo.
+4. Usa **Detener** en MiRealmBot para cerrar toda la sesión y retirar la integración.
 
-Abrir el programa no inicia la protección. Las configuraciones y el modo quedan bloqueados mientras la sesión funciona. Para cambiarlos: **Detener → configurar → Guardar configuración → volver a Juego en vivo → iniciar**. El inicio valida y usa los ajustes actuales; **Guardar configuración** los conserva para la próxima vez que abras el programa.
+Abrir el programa deja la sesión detenida. En 0.3.1 se eliminó el selector de modo: **Iniciar bot** siempre inicia una sesión activa. Las configuraciones quedan bloqueadas mientras la sesión funciona. Para cambiarlas: **Detener → configurar → Guardar configuración → volver a Juego en vivo → iniciar**. El inicio valida y usa los ajustes actuales; **Guardar configuración** los conserva para la próxima vez que abras el programa.
 
 En 0.3.0 se retiraron la pestaña de reproducción de registros y la barra lateral. AutoNexus y AutoAim contienen sus ajustes; la actividad y el control del bot están en Juego en vivo.
 
 ## Leer el estado
 
-- **Sólo observación**: recoge lecturas y decisiones sin actuar.
+- **Activo**: la sesión está iniciada y aplica los módulos configurados cuando se cumplen sus condiciones.
 - **Tecla enviada**: Windows aceptó el envío; comprueba dentro del juego que llegaste al Nexus.
 - **Tecla bloqueada**: el juego no tenía el foco o no estaba disponible. No se reintenta automáticamente en el mismo mapa; detén y vuelve a iniciar cuando puedas mantener el foco del juego.
 - **El perfil no coincide**: el juego cambió. Hace falta una versión cuyo perfil se haya verificado para esa actualización; no cambies el hash manualmente.

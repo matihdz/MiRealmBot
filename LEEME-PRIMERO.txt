@@ -1,4 +1,4 @@
-MiRealmBot 0.3.0 - Inicio rápido
+MiRealmBot 0.3.1 - Inicio rápido
 
 1. Extrae TODO el ZIP. No abras el programa desde dentro del ZIP.
 2. Abre MiRealmBot.exe en la carpeta extraída.
@@ -9,13 +9,11 @@ MiRealmBot 0.3.0 - Inicio rápido
    detén la sesión, desmarca esa opción y elige la MISMA tecla manualmente.
    CTRL = Control izquierdo. Pulsa "Guardar configuración".
 6. Si quieres usar AutoAim, configúralo en su pestaña y guarda.
-7. En "Juego en vivo", elige "Observar" e "Iniciar observación".
-8. Cuando veas tu vida y mapa, pulsa "Detener" y espera el cierre.
-9. Elige "Activo" y pulsa "Iniciar bot" en Juego en vivo.
-10. Vuelve al juego y mantenlo en primer plano.
+7. En "Juego en vivo", pulsa "Iniciar bot" para activar los módulos.
+8. Vuelve al juego y mantenlo en primer plano.
 
 LAS PESTAÑAS
-- Juego en vivo: iniciar/detener, modo y estado del bot.
+- Juego en vivo: iniciar/detener y estado del bot.
 - AutoNexus: porcentaje, predicción y tecla Nexus.
 - AutoAim: sus opciones de apuntado y tecla de autofire detectada.
 - Actualizaciones: buscar, descargar e instalar versiones nuevas.
@@ -31,7 +29,7 @@ AUTOAIM OPCIONAL
   Entre varios bosses elige el más cercano; sin boss, selección normal.
 - Ignorar murallas: excluye las murallas como objetivos del AutoAim.
 - Ambos filtros son independientes y empiezan desmarcados.
-- Inicia el bot en modo Activo desde Juego en vivo. Vuelve al juego,
+- Pulsa "Iniciar bot" en Juego en vivo. Vuelve al juego,
   enciende autofire con tu tecla configurada y acerca el cursor al objetivo.
 - No necesitas mantener otra tecla pulsada. Actúa con autofire encendido
   y el juego sin pausa. No mueve el cursor ni inicia ataques por sí mismo.
@@ -54,8 +52,8 @@ ACTUALIZAR
 - Si usas 0.1.0, descarga y extrae la versión actual manualmente una vez.
 
 PARA TENER EN CUENTA
-- Abrir el programa no inicia la protección.
-- Observar recoge lecturas sin enviar teclas ni cambiar la puntería.
+- Abrir el programa deja la sesión detenida. "Iniciar bot" siempre inicia
+  una sesión activa; ya no hay selector de modo.
 - Conserva _internal junto al ejecutable. No necesitas instalar Python,
   Frida, Ghidra ni REA.
 - Windows de 64 bits e instalación del launcher oficial.
