@@ -46,8 +46,8 @@ function setup(overrides = {}) {
     const playerClass = ptr(10), worldClass = ptr(11), livingClass = ptr(12), visualClass = ptr(13);
     memory.set(world.value + 0x48, player);
     memory.set(player.value + 0x564, 305);
-    memory.set(player.value + 0x744, 305);
-    memory.set(player.value + 0x740, 0);
+    memory.set(player.value + 0x74c, 305);
+    memory.set(player.value + 0x748, 0);
     memory.set(player.value + 0x250, ptr(0x4000));
     memory.set(0x4018, 3);
     memory.set(0x4020, 0);
@@ -100,7 +100,7 @@ function setup(overrides = {}) {
     };
     const bridge = sandbox.createDebuffsBridge(context);
     bridge.install();
-    function enter({ receiver = player, caller = 0x18155f1fe, getter = 0x777aa0 } = {}) {
+    function enter({ receiver = player, caller = 0x18193173e, getter = 0x7a6540 } = {}) {
         const hook = env.hookRvas.indexOf(getter);
         assert.ok(hook >= 0, 'Requested test getter must have an owned hook.');
         const invocation = { returnAddress: ptr(caller), testHook: hook };
@@ -119,8 +119,8 @@ function setup(overrides = {}) {
         memory.set(0x4020, word);
         if ('word1' in values) memory.set(0x4024, values.word1);
         if ('mp' in values) memory.set(player.value + 0x564, values.mp);
-        if ('mp_sync' in values) memory.set(player.value + 0x744, values.mp_sync);
-        if ('mp_override' in values) memory.set(player.value + 0x740, values.mp_override);
+        if ('mp_sync' in values) memory.set(player.value + 0x74c, values.mp_sync);
+        if ('mp_override' in values) memory.set(player.value + 0x748, values.mp_override);
         bridge.capture(env.association);
         return bridge.snapshot().quiet_observation;
     }
@@ -153,7 +153,7 @@ test('Active protection replaces only the verified local movement bool', () => {
     assert.equal(context.ownedHooks.length, 1);
     bridge.install();
     assert.equal(env.hooks.length, 1);
-    assert.deepEqual(env.guards.map(guard => guard.rva), [0x777aa0, 0x155f170, 0x155f1f9]);
+    assert.deepEqual(env.guards.map(guard => guard.rva), [0x7a6540, 0x19316b0, 0x1931739]);
 });
 test('Observation and an absent effect preserve the original native result', () => {
     const observe = setup({ active: false });
@@ -165,7 +165,7 @@ test('Observation and an absent effect preserve the original native result', () 
 });
 test('Other callers and other entities retain the game result', () => {
     const trial = setup();
-    assert.equal(trial.leave(trial.enter({ caller: 0x18155f300 })).replacements, 0);
+    assert.equal(trial.leave(trial.enter({ caller: 0x181931900 })).replacements, 0);
     assert.equal(trial.leave(trial.enter({ receiver: trial.other })).replacements, 0);
     assert.equal(trial.bridge.snapshot().checks, 0);
 });
@@ -294,7 +294,7 @@ test('Quiet recording works alone, with typed fields and no hooks, foreground ch
     assert.equal(trial.env.guards.length, 0);
     assert.deepEqual(Object.fromEntries(trial.env.fields.map(field => [field.name, [field.type, field.offset]])), {
         OCLNLBHDEFK: ['FKALGHJIADI', 0x48], FMHMGKEPIDN: ['System.Single', 0x564],
-        GGOFEAENCCG: ['System.Int32', 0x744], LHIKNJPECMB: ['System.Boolean', 0x740],
+        GGOFEAENCCG: ['System.Int32', 0x74c], LHIKNJPECMB: ['System.Boolean', 0x748],
         COHCKAPOLCA: ['System.Int32[]', 0x250] });
     assert.equal(observation.current.mp, 305);
     assert.equal(observation.current.mp_sync, 305);
@@ -415,7 +415,7 @@ test('Unknown and malformed Quiet reads preserve partial facts and do not disabl
         if (failure === 'bad_length') trial.memory.set(0x4018, Number.MAX_SAFE_INTEGER + 1);
         if (failure === 'unreadable') trial.env.failQuietRead = 0x4020;
         if (failure === 'nan_mp') trial.memory.set(trial.player.value + 0x564, NaN);
-        if (failure === 'bad_bool') trial.memory.set(trial.player.value + 0x740, 2);
+        if (failure === 'bad_bool') trial.memory.set(trial.player.value + 0x748, 2);
         const result = trial.sample(1050, 2);
         assert.ok(result.error, failure);
         assert.equal(result.available, false, failure);
@@ -565,7 +565,7 @@ test('Quiet MP read and metadata errors do not interrupt a valid Confuse observa
         }
         trial.sample(1000, 0x402);
         if (failure === 'nan_mp') trial.memory.set(trial.player.value + 0x564, NaN);
-        if (failure === 'invalid_bool') trial.memory.set(trial.player.value + 0x740, 2);
+        if (failure === 'invalid_bool') trial.memory.set(trial.player.value + 0x748, 2);
         if (failure === 'unreadable_mp') trial.env.failQuietRead = trial.player.value + 0x564;
         trial.sample(1050, 0x402);
         const result = trial.bridge.snapshot();
@@ -670,15 +670,9 @@ test('Enabling Confuse after Quiet-only recording reuses condition metadata and 
     assert.equal(trial.env.conditionPointerReads, 2);
     assert.equal(trial.env.conditionWordReads, 2);
 });
-const blindSites = [
-    { getter: 0x7740a0, caller: 0x180e05652 },
-    { getter: 0x7740a0, caller: 0x180e07fcd },
-    { getter: 0x7740a0, caller: 0x180e0b86d },
-    { getter: 0x77a2f0, caller: 0x180e0472d },
-    { getter: 0x77a2f0, caller: 0x180e060dd },
-    { getter: 0x77a2f0, caller: 0x180e0a6ed },
-    { getter: 0x77a2f0, caller: 0x180e0b11d }
-];
+const blindSites = [0x18045175d, 0x18045300d, 0x18045558d, 0x18045573d,
+    0x180455a3d, 0x18045745d, 0x18045787d, 0x1804588bd]
+    .map(caller => ({ getter: 0x7a8ea0, caller }));
 test('Blind defaults off and invalid live values reject without changing a valid scoped call', () => {
     const trial = setup(), invocation = trial.enter();
     assert.equal(trial.bridge.snapshot().blind, false);
@@ -689,29 +683,28 @@ test('Blind defaults off and invalid live values reject without changing a valid
     assert.equal(trial.env.hooks.length, 1);
     assert.equal(trial.leave(invocation).replacements, 1);
 });
-test('Blind-only protection installs two getters and accepts exactly the seven verified visual return sites', () => {
+test('Blind-only protection installs one getter and accepts exactly the eight verified visual return sites', () => {
     const trial = setup({ confuse: false, blind: true });
     trial.sample(1000, 0x80);
-    assert.equal(trial.env.hooks.length, 2);
-    assert.equal(trial.context.ownedHooks.length, 2);
-    assert.equal(trial.env.guards.length, 16);
-    assert.equal(trial.env.methods.filter(method => method.returnType === 'System.Boolean').length, 2);
+    assert.equal(trial.env.hooks.length, 1);
+    assert.equal(trial.context.ownedHooks.length, 1);
+    assert.equal(trial.env.guards.length, 17);
+    assert.equal(trial.env.methods.filter(method => method.returnType === 'System.Boolean').length, 1);
     const callers = trial.env.methods.filter(method => method.returnType === 'System.Void');
-    assert.equal(callers.length, 7);
+    assert.equal(callers.length, 8);
     assert.ok(callers.every(method => method.params.length === 0 && method.isStatic === false));
     for (const site of blindSites) {
         assert.equal(trial.leave(trial.enter(site)).replacements, 1, site.caller.toString(16));
         assert.equal(trial.leave(trial.enter({ ...site, caller: site.caller - 1 })).replacements, 0);
         assert.equal(trial.leave(trial.enter({ ...site, receiver: trial.other })).replacements, 0);
-        assert.equal(trial.leave(trial.enter({ ...site, getter: site.getter === 0x7740a0 ? 0x77a2f0 : 0x7740a0 })).replacements, 0);
     }
     const result = trial.bridge.snapshot();
     assert.equal(result.blind, true);
     assert.equal(result.active, true);
     assert.match(result.status, /AntiBlind activo/);
-    assert.equal(result.visual_checks, 7);
-    assert.equal(result.visual_detections, 7);
-    assert.equal(result.visual_blocks, 7);
+    assert.equal(result.visual_checks, 8);
+    assert.equal(result.visual_detections, 8);
+    assert.equal(result.visual_blocks, 8);
     assert.equal(result.checks, 0);
     assert.equal(result.blocked, 0);
     assert.equal(result.blind_observation.current.visual_blocks, 0);
@@ -720,7 +713,7 @@ test('Blind-only protection installs two getters and accepts exactly the seven v
     assert.equal(trial.bridge.bindings.mana_writes, false);
     assert.equal(trial.bridge.bindings.blind_protection.runtime_visual_verified, false);
 });
-test('Both Blind getters recheck identity, map, freshness, focus, world link and lifecycle after entry', () => {
+test('The Blind getter rechecks identity, map, freshness, focus, world link and lifecycle after entry', () => {
     for (const site of [blindSites[0], blindSites[3]]) {
         for (const phase of ['enter', 'leave']) {
             for (const change of ['stale', 'future', 'absent', 'world', 'focus', 'pid', 'running', 'invalidate']) {
@@ -795,7 +788,7 @@ test('All three condition observations share one read and Quiet MP failures spar
     trial.memory.set(trial.player.value + 0x564, NaN);
     trial.sample(1050, 0x482);
     const result = trial.bridge.snapshot();
-    assert.equal(trial.env.hooks.length, 3);
+    assert.equal(trial.env.hooks.length, 2);
     assert.equal(trial.env.conditionPointerReads, 2);
     assert.equal(trial.env.conditionWordReads, 2);
     assert.equal(trial.env.fields.filter(field => field.name === 'COHCKAPOLCA').length, 1);
@@ -841,15 +834,15 @@ test('Blind toggles invalidate in-flight calls and its own intervals without rei
     assert.equal(result.blind_observation.last_episode.start_kind, 'first_observed_true');
     assert.equal(result.blind_observation.last_episode.before, null);
     assert.equal(result.confuse_observation.revision, 1);
-    assert.equal(trial.env.attachAttempts, 3);
+    assert.equal(trial.env.attachAttempts, 2);
     assert.equal(trial.bridge.bindings.blind_protection, bindings);
     assert.equal(trial.leave(trial.enter(blindSites[3])).replacements, 1);
 });
 test('Blind profile failures are explicit and retain the existing Confuse owner for cleanup', () => {
     for (const failure of ['method', 'guard']) {
         const trial = setup();
-        if (failure === 'method') trial.env.failMethodRva = 0xe055c0;
-        if (failure === 'guard') trial.env.failGuardRva = 0xe0564d;
+        if (failure === 'method') trial.env.failMethodRva = 0x4516d0;
+        if (failure === 'guard') trial.env.failGuardRva = 0x451758;
         assert.throws(() => trial.bridge.configure({ enabled: true, active: true, confuse: true,
             blind: true, quiet: false }), /unexpected .* profile/);
         assert.equal(trial.context.ownedHooks.length, 1);
@@ -857,14 +850,13 @@ test('Blind profile failures are explicit and retain the existing Confuse owner 
         assert.equal(trial.leave(trial.enter()).replacements, 1);
     }
 });
-test('A partial Blind attachment retains its owned hook, leaves both Blind gates inactive and preserves Confuse', () => {
+test('A failed Blind attachment leaves its gate inactive and preserves the owned Confuse hook', () => {
     const trial = setup();
-    trial.env.failAttachAt = 3;
+    trial.env.failAttachAt = 2;
     assert.throws(() => trial.bridge.configure({ enabled: true, active: true, confuse: true,
         blind: true, quiet: false }), /native attach failed/);
-    assert.equal(trial.context.ownedHooks.length, 2);
-    assert.equal(trial.env.hooks.length, 2);
-    assert.equal(trial.leave(trial.enter(blindSites[0])).replacements, 0);
+    assert.equal(trial.context.ownedHooks.length, 1);
+    assert.deepEqual(trial.env.hookRvas, [0x7a6540]);
     assert.equal(trial.leave(trial.enter()).replacements, 1);
     assert.match(trial.bridge.snapshot().error, /AntiBlind.*native attach failed/);
 });
@@ -877,8 +869,8 @@ test('A Blind hook failure does not disable an independently valid Confuse hook'
     assert.equal(trial.leave(trial.enter()).replacements, 1);
     assert.match(trial.bridge.snapshot().error, /AntiBlind.*unreadable world/);
 });
-const silencedSites = [0x18155f551, 0x181570a37, 0x181570c43, 0x181564db6, 0x181564f9e]
-    .map(caller => ({ getter: 0x777b20, caller }));
+const silencedSites = [0x181931a41, 0x18193eecb, 0x18193f128]
+    .map(caller => ({ getter: 0x7a65c0, caller }));
 test('Silenced defaults off and invalid flags cannot change an existing scoped movement call', () => {
     const trial = setup(), invocation = trial.enter();
     assert.equal(trial.bridge.snapshot().silenced, false);
@@ -889,28 +881,27 @@ test('Silenced defaults off and invalid flags cannot change an existing scoped m
     assert.equal(trial.leave(invocation).replacements, 1);
     assert.equal(trial.env.conditionWord1Reads, 0);
 });
-test('Silenced-only installs the getter and limits replacements to five verified local ability return sites', () => {
+test('Silenced-only installs the getter and limits replacements to three verified local ability return sites', () => {
     const trial = setup({ confuse: false, silenced: true });
     trial.sample(1000, 0, { word1: 0x10000 });
-    assert.deepEqual(trial.env.hookRvas, [0x777b20]);
-    assert.equal(trial.env.guards.length, 9);
-    const callers = trial.env.methods.filter(method => method.rva !== 0x777b20);
+    assert.deepEqual(trial.env.hookRvas, [0x7a65c0]);
+    assert.equal(trial.env.guards.length, 6);
+    const callers = trial.env.methods.filter(method => method.rva !== 0x7a65c0);
     assert.deepEqual(callers.map(method => [method.name, [...method.params], method.returnType, method.isStatic]), [
         ['GCAEONBDGJF', ['System.Single', 'System.Single'], 'System.Boolean', false],
-        ['PBABCOMDDPO', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false],
-        ['JBGFEHMHPGP', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false] ]);
+        ['PBABCOMDDPO', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false] ]);
     for (const site of silencedSites) {
         assert.equal(trial.leave(trial.enter(site)).replacements, 1);
         assert.equal(trial.leave(trial.enter({ ...site, caller: site.caller - 1 })).replacements, 0);
         assert.equal(trial.leave(trial.enter({ ...site, receiver: trial.other })).replacements, 0);
     }
-    assert.equal(trial.leave(trial.enter({ getter: 0x777b20, caller: 0x180e1abcc })).replacements, 0);
+    assert.equal(trial.leave(trial.enter({ getter: 0x7a65c0, caller: 0x180e1abcc })).replacements, 0);
     const result = trial.bridge.snapshot();
     assert.equal(result.active, true);
     assert.match(result.status, /AntiSilenced/);
-    assert.equal(result.ability_gate_checks, 5);
-    assert.equal(result.ability_gate_detections, 5);
-    assert.equal(result.ability_gate_bypasses, 5);
+    assert.equal(result.ability_gate_checks, 3);
+    assert.equal(result.ability_gate_detections, 3);
+    assert.equal(result.ability_gate_bypasses, 3);
     assert.equal(result.checks, 0);
     assert.equal(result.visual_checks, 0);
     assert.equal(result.silenced_experimental, true);
@@ -935,7 +926,7 @@ test('Silenced records word1 rather than a matching word0 mask and keeps bypasse
     assert.equal(observation.last_episode.start_kind, 'false_to_true');
     assert.equal(observation.last_episode.before.condition_word1, 0);
     assert.equal(trial.leave(trial.enter(silencedSites[0]), 0x100).replacements, 0);
-    assert.equal(trial.leave(trial.enter(silencedSites[4])).replacements, 1);
+    assert.equal(trial.leave(trial.enter(silencedSites[2])).replacements, 1);
     trial.sample(1100, 0, { word1: 0x10000 });
     observation = trial.bridge.snapshot().silenced_observation;
     assert.equal(observation.detections, 1);
@@ -1015,7 +1006,7 @@ test('Silenced getter rechecks running, focus, association freshness and identit
         }
     }
     for (const field of ['map_id', 'identity']) {
-        const trial = setup({ confuse: false, silenced: true }), invocation = trial.enter(silencedSites[4]);
+        const trial = setup({ confuse: false, silenced: true }), invocation = trial.enter(silencedSites[2]);
         trial.env.association[field] = 'changed';
         assert.equal(trial.leave(invocation).replacements, 0, field);
     }
@@ -1038,8 +1029,8 @@ test('Disabling Silenced stops in-flight replacements and interrupts only its ow
     result = trial.bridge.snapshot();
     assert.equal(result.silenced_observation.last_episode.start_kind, 'first_observed_true');
     assert.equal(result.silenced_observation.last_episode.before, null);
-    assert.equal(trial.env.attachAttempts, 4);
-    assert.equal(trial.leave(trial.enter(silencedSites[4])).replacements, 1);
+    assert.equal(trial.env.attachAttempts, 3);
+    assert.equal(trial.leave(trial.enter(silencedSites[2])).replacements, 1);
 });
 test('Silenced maps and stale gaps interrupt without inventing recovery or reusing an old before sample', () => {
     for (const problem of ['map', 'gap', 'lifecycle']) {
@@ -1056,7 +1047,7 @@ test('Silenced maps and stale gaps interrupt without inventing recovery or reusi
 });
 test('Silenced native guard failure is scoped while movement protection retains its owned hook', () => {
     const trial = setup();
-    trial.env.failGuardRva = 0x1570520;
+    trial.env.failGuardRva = 0x193e9b0;
     assert.throws(() => trial.bridge.configure({ enabled: true, active: true, confuse: true,
         silenced: true, quiet: false }), /unexpected code profile/);
     assert.equal(trial.context.ownedHooks.length, 1);

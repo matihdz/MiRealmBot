@@ -10,7 +10,7 @@ from unittest import mock
 
 from autonexus_controller import Controller, HealthFrame
 from autonexus_core import Action, AutoNexus, Decision
-from bot_runtime import (MAX_AGE_MS, SUPPORTED_GAMEASSEMBLY_SHA256,
+from bot_runtime import (MAX_AGE_MS, PREVIOUS_GAMEASSEMBLY_SHA256, SUPPORTED_GAMEASSEMBLY_SHA256,
                             TelemetryConsumer, cleanup_runtime, deliver,
                             load_config, main, parse_poll, verify_module_hash,
                             verify_start, _console_health)
@@ -207,11 +207,13 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIs(config.use_state_filters, False)
             self.assertIs(config.prediction_enabled, False)
             path.write_text(json.dumps({"threshold": 0.4, "nexus_key": "q",
-                                        "use_state_filters": True}), encoding="utf-8")
+                                        "use_state_filters": True,
+                                        "gameassembly_sha256": PREVIOUS_GAMEASSEMBLY_SHA256}), encoding="utf-8")
             config = load_config(path, threshold_percent=25.8)
             self.assertEqual(config.threshold, 0.258)
             self.assertEqual(config.nexus_key, "Q")
             self.assertIs(config.use_state_filters, True)
+            self.assertEqual(config.gameassembly_sha256, SUPPORTED_GAMEASSEMBLY_SHA256)
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
             main(["--help"])
         self.assertEqual(caught.exception.code, 0)

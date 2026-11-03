@@ -84,13 +84,14 @@ function createAutoAimBridge(context) {
         conditions: instanceField(livingClass, 'COHCKAPOLCA', 'System.Int32[]', 0x250),
         velocity: instanceField(livingClass, 'ECGPFJKCCAN', 'UnityEngine.Vector2', 0x278)
     };
-    const dispatch = typedMethod(inputClass, 'NBGCFFLKGHD', [], 'System.Void', false, 0xe94580);
+    const dispatch = typedMethod(inputClass, 'NBGCFFLKGHD', [], 'System.Void', false, 0x173b340);
     const camera = typedMethod(cameraClass, 'ScreenToWorldPoint', ['UnityEngine.Vector3'],
-        'UnityEngine.Vector3', false, 0x33d0930);
-    const guards = [verifyBytes(0xe94580, '48895c2408574883ec60488b4130488bd9'),
-        verifyBytes(0xe945de, 'e84dc35302'), verifyBytes(0xe945e3, 'f20f1000f20f11442420'),
-        verifyBytes(0xe91ae0, '0fb64164c3'), verifyBytes(0xe8dc70, '0fb681a8000000c3'),
-        verifyBytes(0x33d0930, '48895c2410564883ec40f2410f100033c0')];
+        'UnityEngine.Vector3', false, 0x3518370);
+    const projectionReturnRva = 0x173b3a3;
+    const guards = [verifyBytes(0x173b340, '48895c2408574883ec60488b4130488bd9'),
+        verifyBytes(0x173b39e, 'e8cdcfdd01'), verifyBytes(projectionReturnRva, 'f20f1000f20f11442420'),
+        verifyBytes(0x111b400, '0fb64164c3'), verifyBytes(0x1731c80, '0fb681a8000000c3'),
+        verifyBytes(0x3518370, '48895c2410564883ec40f2410f100033c0')];
     const elementClass = new NativeFunction(module.getExportByName('il2cpp_class_get_element_class'),
         'pointer', ['pointer'], { abi: 'win64' });
     const valueSize = new NativeFunction(module.getExportByName('il2cpp_class_value_size'),
@@ -122,7 +123,7 @@ function createAutoAimBridge(context) {
     const windowProcess = new NativeFunction(user32.getExportByName('GetWindowThreadProcessId'),
         'uint32', ['pointer', 'pointer'], { abi: 'win64' });
     const foregroundPid = Memory.alloc(4);
-    const returnAddress = module.base.add(0xe945e3);
+    const returnAddress = module.base.add(projectionReturnRva);
     const scopes = new Map();
     const layouts = new Map();
     const MAX_ENTITIES = 16384; // <=384 KiB of entries per native cursor projection.

@@ -25,6 +25,9 @@ const threadScopes = new Map();
 const MAX_EVENTS = 256;
 const MAX_SCOPE_THREADS = 128;
 const MAX_SCOPE_DEPTH = 64;
+// This call to the damage calculator is inside the helper reached from the collision hook.
+const COLLISION_DAMAGE_CALL = 0xc20702;
+const FINAL_DAMAGE_CAPTURE = 0x7a4ae1;
 let diagnostics = {};
 let gameBindingsBridge = null;
 let autoaimBridge = null;
@@ -244,15 +247,15 @@ function start(options = {}) {
     const bindings = {
         schema: 'mirealmbot.internal-health-bridge.v1',
         authority: 'auxiliary runtime observation; not REA Evidence',
-        expected_gameassembly_sha256: 'c4f87cde09d713be23c96a5c17774bdbd65e36cd4a4c6fb017759b24daea01cb',
+        expected_gameassembly_sha256: 'e213023087e8a09f03a947394fa02bf346c156c30579cdb5562e7d21d4563519',
         digest_verification: 'The host verifies the selected file before attaching this script.',
         module: { name: module.name, path: module.path, base: module.base.toString(), size: module.size },
         metadata_thread: { own_thread_attached: false, own_thread_detached: false },
         sample_interval_ms: 50,
         health_source: 'Typed int32 local-player fields: ABCPKBGJPEP current HP and OADOHPKBPJB maximum HP.',
         health_basis: {
-            current_hp_rea_evidence: 'ev_ad5a06a1fca9cd33330c155c3d3b9ad924e8df4d7cc6577299f335edec1578480',
-            maximum_hp_observation: 'health-probe-20261024T225821.753194Z-pid42848.json: getter RVA 0x77a120, mov eax,[rcx+0x208]; ret'
+            previous_profile_current_hp_rea_evidence: 'ev_ad5a06a1fca9cd33330c155c3d3b9ad924e8df4d7cc6577299f335edec1578480',
+            maximum_hp_observation: 'Getter RVA 0x7a8cd0, mov eax,[rcx+0x208]; ret'
         },
         health_limitations: null,
         tracked_health_source: null,
@@ -315,15 +318,15 @@ function start(options = {}) {
         mapName = instanceField(worldClass, 'PICNEHLAODO', 'System.String', 280);
         currentHealth = instanceField(playerClass, 'ABCPKBGJPEP', 'System.Int32', 524);
         maximumHealth = instanceField(playerClass, 'OADOHPKBPJB', 'System.Int32', 520);
-        const maximumGetter = playerClass.add(0x678).readPointer();
-        if (!maximumGetter.equals(module.base.add(0x77a120)) ||
+        const maximumGetter = playerClass.add(0x6b8).readPointer();
+        if (!maximumGetter.equals(module.base.add(0x7a8cd0)) ||
             Array.from(new Uint8Array(maximumGetter.readByteArray(7)))
                 .map(value => value.toString(16).padStart(2, '0')).join('') !== '8b8108020000c3') {
             throw new Error('The observed maximum-HP getter does not match this profile.');
         }
-        update = method(guiClass, 'Update', '0x3bb080');
-        clean = method(guiClass, 'Clean', '0x3b4000');
-        init = method(guiClass, 'Init', '0x3b5ab0');
+        update = method(guiClass, 'Update', '0x1481580');
+        clean = method(guiClass, 'Clean', '0x14797c0');
+        init = method(guiClass, 'Init', '0x147c530');
         bindings.classes = [guiClass, playerClass, worldClass, stringClass]
             .map(klass => ({ name: className(klass), metadata_address: klass.toString() }));
         bindings.fields = { playerField, worldField, worldPlayer, mapName, currentHealth, maximumHealth };
@@ -336,25 +339,26 @@ function start(options = {}) {
             bindings.classes.push(...[baseEntityClass, rootEntityClass, projectileClass]
                 .map(klass => ({ name: className(klass), metadata_address: klass.toString() })));
             bindings.prediction.condition_array = instanceField(baseEntityClass, 'COHCKAPOLCA', 'System.Int32[]', 0x250);
-            collision = typedMethod(projectileClass, 'GJFKGLJEGKO', ['System.Int32', 'System.Int32'], 'System.Boolean', false, 0xfefd00);
+            collision = typedMethod(projectileClass, 'GJFKGLJEGKO', ['System.Int32', 'System.Int32'], 'System.Boolean', false, 0xc24e00);
             effectiveDamage = typedMethod(rootEntityClass, 'LPEDCDIDDLM',
                 ['System.Int32', 'System.Int32', 'System.Boolean', 'System.Int32[]', 'LKHPPBEGNOM', 'AMKGEOMDELF'],
-                'System.Int32', true, 0x4f79c0);
+                'System.Int32', true, 0xc3fdf0);
             baseDamage = typedMethod(baseEntityClass, 'FNEBPDEDIJP',
                 ['System.Boolean', 'System.Int32', 'System.Collections.Generic.List<System.Byte>', 'System.Boolean', 'HBEAKBIHANL', 'System.Boolean', 'System.Boolean'],
-                'System.Void', false, 0x775710);
-            healthSync = typedMethod(baseEntityClass, 'NIDPCHCNDLJ', ['System.Int32'], 'System.Void', false, 0x77a2c0);
+                'System.Void', false, 0x7a4330);
+            healthSync = typedMethod(baseEntityClass, 'NIDPCHCNDLJ', ['System.Int32'], 'System.Void', false, 0x7a8e70);
             Object.assign(bindings.methods, { collision, effectiveDamage, baseDamage, healthSync });
             bindings.prediction.code_guards = [
-                verifyBytes(0xfefd00, '40535741544881ecf0000000803d4d32'),
-                verifyBytes(0x4f79c0, '405355565741554883ec30803d3753e5'),
-                verifyBytes(0x775710, '488bc444894018885010488948085356'),
-                verifyBytes(0x77a2c0, '89910c020000488b11488b8218050000'),
-                verifyBytes(0x775ea8, 'f3440f2ce8'),
-                verifyBytes(0x775ead, '803d3785bd03007513488d0d2b09a603'),
-                verifyBytes(0xff02f6, 'e8c57650ff')
+                verifyBytes(0xc24e00, '4053415441574881ece0000000803de6'),
+                verifyBytes(0xc3fdf0, '405355565741554883ec30803d527286'),
+                verifyBytes(0x7a4330, '488bc444894018885010488948085356'),
+                verifyBytes(0x7a8e70, '89910c020000488b11488b8218060000'),
+                verifyBytes(FINAL_DAMAGE_CAPTURE - 5, 'f3440f2ce8'),
+                verifyBytes(FINAL_DAMAGE_CAPTURE, '803d3efbcf03007513488d0d6788b803'),
+                verifyBytes(0xc25334, 'e847b2ffff'),
+                verifyBytes(COLLISION_DAMAGE_CALL, 'e8e9f60100')
             ];
-            bindings.prediction.rea_evidence = [
+            bindings.prediction.previous_profile_rea_evidence = [
                 'ev_0b3f48464ccffff357701f299368fb6e3141d644168eecef130ecb286c32ba7e6'
             ];
             predictionPrepared = true;
@@ -555,7 +559,8 @@ function start(options = {}) {
                 if (!usable()) return;
                 try {
                     const state = scopeFor(this.threadId);
-                    if (state === null || state.collisions.length === 0 || !this.returnAddress.equals(module.base.add(0xff02fb))) return;
+                    if (state === null || state.collisions.length === 0 ||
+                        !this.returnAddress.equals(module.base.add(COLLISION_DAMAGE_CALL + 5))) return;
                     const scope = state.collisions[state.collisions.length - 1];
                     const now = Date.now();
                     const frame = readEventFrame(now, args[4]);
@@ -609,7 +614,7 @@ function start(options = {}) {
                 catch (error) { rememberCaptureError(error); }
             }
         }));
-        ownedHooks.push(Interceptor.attach(module.base.add(0x775ead), {
+        ownedHooks.push(Interceptor.attach(module.base.add(FINAL_DAMAGE_CAPTURE), {
             onEnter(args) {
                 if (!usable()) return;
                 try {

@@ -57,6 +57,8 @@ function createDebuffsBridge(context) {
     const silencedState = observationState('silenced', 'Silenced', 1, 0x10000, enabledSilenced, ability);
     const observations = [quietState, confuseState, blindState, silencedState];
     const state = { foreground: false, captured_at: null };
+    // REA references describe the previous build used to identify these routes.
+    // The typed metadata and byte guards below apply to the current profile.
     const bindings = { quiet_supported: false, quiet_reason: quietReason, blind_supported: true,
         silenced_experimental: true, server_acceptance_verified: false,
         source: 'Local-player condition results at verified movement, visual and local ability call sites.',
@@ -199,8 +201,8 @@ function createDebuffsBridge(context) {
         try {
             quietFields = {
                 mp: instanceField(playerClass, 'FMHMGKEPIDN', 'System.Single', 0x564),
-                mp_sync: instanceField(playerClass, 'GGOFEAENCCG', 'System.Int32', 0x744),
-                mp_override: instanceField(playerClass, 'LHIKNJPECMB', 'System.Boolean', 0x740)
+                mp_sync: instanceField(playerClass, 'GGOFEAENCCG', 'System.Int32', 0x74c),
+                mp_override: instanceField(playerClass, 'LHIKNJPECMB', 'System.Boolean', 0x748)
             };
             bindings.quiet_observation.fields = Object.assign({ conditions: conditionField }, quietFields);
         } catch (caught) {
@@ -209,15 +211,15 @@ function createDebuffsBridge(context) {
         }
     }
     function prepareMovement() {
-        const gate = typedMethod(common.livingClass, 'KDDCMDNLLKF', [], 'System.Boolean', false, 0x777aa0);
+        const gate = typedMethod(common.livingClass, 'KDDCMDNLLKF', [], 'System.Boolean', false, 0x7a6540);
         const direction = typedMethod(playerClass, 'FOFMOMDBGGI',
-            ['System.Single', 'UnityEngine.Vector2'], 'System.Void', false, 0x155f170);
-        const guards = [verifyBytes(0x777aa0, '40534883ec20803daa69bd0300488bd9'),
-            verifyBytes(0x155f170, '40534883ec60803d8e6ddf0200488bd9'),
-            verifyBytes(0x155f1f9, 'e8a28821ff84c00f84a0000000')];
+            ['System.Single', 'UnityEngine.Vector2'], 'System.Void', false, 0x19316b0);
+        const guards = [verifyBytes(0x7a6540, '40534883ec20803db4e0cf0300488bd9'),
+            verifyBytes(0x19316b0, '40534883ec60803d67cbb70200488bd9'),
+            verifyBytes(0x1931739, 'e8024ee7fe84c00f84a0000000')];
         Object.assign(bindings, { gate, direction, world_player: common.worldPlayer,
-            code_guards: guards, return_address_rva: '0x155f1fe' });
-        return [{ method: gate, returns: new Set([module.base.add(0x155f1fe).toString()]), installed: false }];
+            code_guards: guards, return_address_rva: '0x193173e' });
+        return [{ method: gate, returns: new Set([module.base.add(0x193173e).toString()]), installed: false }];
     }
     function prepareVisual() {
         const visualClass = resolve('Assembly-CSharp.dll', '', 'OGAIKIFOGLJ');
@@ -227,36 +229,33 @@ function createDebuffsBridge(context) {
             postprocessing: instanceField(visualClass, 'PAIEJEMMNKL', 'UnityEngine.PostProcessing.PostProcessingBehaviour', 0x20),
             effects: instanceField(visualClass, 'BCPFEICOKIF', 'System.Collections.Generic.Dictionary<JFMMLAALNPO,System.Boolean>', 0x28)
         };
-        const getters = [
-            typedMethod(common.livingClass, 'EDFAOHDOGOA', [], 'System.Boolean', false, 0x7740a0),
-            typedMethod(common.livingClass, 'NIMKJAPCKPM', [], 'System.Boolean', false, 0x77a2f0)
-        ];
-        // Each CALL and its next instruction were verified with REA. Getter A
-        // has three visual consumers; getter B has four. Other callers remain
-        // outside this allowlist, even when they query the same Blind flag.
+        const getter = typedMethod(common.livingClass, 'NIMKJAPCKPM', [], 'System.Boolean', false, 0x7a8ea0);
+        // The visual effect methods call the Blind getter for the local player
+        // and pass its result to a helper of the same visual class.
         const sites = [
-            { name: 'FEOIMPPGOJB', entry: 0xe055c0, call: 0xe0564d, getter: 0,
-                entry_bytes: '40534883ec20803dadc8540300488bd9', call_bytes: 'e84eea96ff4533c9440fb6c0ba01000000488bcbe8' },
-            { name: 'KCAKJFFGGIN', entry: 0xe07f40, call: 0xe07fc8, getter: 0,
-                entry_bytes: '40534883ec20803d639f540300488bd9', call_bytes: 'e8d3c096ff4533c9440fb6c033d2488bcbe812c5ff' },
-            { name: 'ONBEBONOEIO', entry: 0xe0b7e0, call: 0xe0b868, getter: 0,
-                entry_bytes: '40534883ec20803de466540300488bd9', call_bytes: 'e8338896ff4533c9440fb6c033d2488bcbe8828dff' },
-            { name: 'CKJINFFLKIN', entry: 0xe046a0, call: 0xe04728, getter: 1,
-                entry_bytes: '40534883ec20803d17d8540300488bd9', call_bytes: 'e8c35b97ff4533c9440fb6c0ba01000000488bcbe8' },
-            { name: 'GLMKPJNPODF', entry: 0xe06050, call: 0xe060d8, getter: 1,
-                entry_bytes: '40534883ec20803d2ebe540300488bd9', call_bytes: 'e8134297ff4533c9440fb6c033d2488bcbe8420700' },
-            { name: 'NHHAFNPILOM', entry: 0xe0a660, call: 0xe0a6e8, getter: 1,
-                entry_bytes: '40534883ec20803d5c78540300488bd9', call_bytes: 'e803fc96ff4533c9440fb6c033d2488bcbe8f29dff' },
-            { name: 'OEHCMLHJGIP', entry: 0xe0b090, call: 0xe0b118, getter: 1,
-                entry_bytes: '40534883ec20803d056e540300488bd9', call_bytes: 'e8d3f196ff4533c9440fb6c033d2488bcbe8c2bdff' }
+            { name: 'ADFOEADHNBJ', entry: 0x4516d0, call: 0x451758,
+                entry_bytes: '40534883ec20803de415050400488bd9', call_bytes: 'e8437735004533c9440fb6c033d2488bcbe81295' },
+            { name: 'CKJINFFLKIN', entry: 0x452f80, call: 0x453008,
+                entry_bytes: '40534883ec20803d37fd040400488bd9', call_bytes: 'e8935e35004533c9440fb6c0ba01000000488bcb' },
+            { name: 'GCLIFEJGOJF', entry: 0x455500, call: 0x455588,
+                entry_bytes: '40534883ec20803db6d7040400488bd9', call_bytes: 'e8133935004533c9440fb6c0ba01000000488bcb' },
+            { name: 'GEDKAPLNBMO', entry: 0x4556b0, call: 0x455738,
+                entry_bytes: '40534883ec20803debd5040400488bd9', call_bytes: 'e8633735004533c9440fb6c033d2488bcbe862c5' },
+            { name: 'GNGKGBGNDDA', entry: 0x4559b0, call: 0x455a38,
+                entry_bytes: '40534883ec20803dcfd2040400488bd9', call_bytes: 'e8633435004533c9440fb6c0ba01000000488bcb' },
+            { name: 'KHEIMOPBFJG', entry: 0x4573d0, call: 0x457458,
+                entry_bytes: '40534883ec20803db0b8040400488bd9', call_bytes: 'e8431a35004533c9440fb6c0ba01000000488bcb' },
+            { name: 'KLLECBHDBFI', entry: 0x4577f0, call: 0x457878,
+                entry_bytes: '40534883ec20803db0b4040400488bd9', call_bytes: 'e8231635004533c9440fb6c0ba01000000488bcb' },
+            { name: 'MLEPGHHBMFA', entry: 0x458830, call: 0x4588b8,
+                entry_bytes: '40534883ec20803d73a4040400488bd9', call_bytes: 'e8e30535004533c9440fb6c033d2488bcbe8e2e5' }
         ];
         const callers = sites.map(site => typedMethod(visualClass, site.name, [], 'System.Void', false, site.entry));
-        const guards = [verifyBytes(0x7740a0, '40534883ec20803d6da3bd0300488bd9'),
-            verifyBytes(0x77a2f0, '40534883ec20803d5f41bd0300488bd9')];
+        const guards = [verifyBytes(0x7a8ea0, '40534883ec20803d72b7cf0300488bd9')];
         for (const site of sites) {
             guards.push(verifyBytes(site.entry, site.entry_bytes), verifyBytes(site.call, site.call_bytes));
         }
-        bindings.blind_protection = { getters, callers, visual_fields: fields,
+        bindings.blind_protection = { getters: [getter], callers, visual_fields: fields,
             code_guards: guards, return_address_rvas: sites.map(site => '0x' + (site.call + 5).toString(16)),
             source: 'Only local-player Blind getter results returning to verified visual effect consumers.',
             runtime_visual_verified: false,
@@ -270,31 +269,25 @@ function createDebuffsBridge(context) {
                 'ev_5205c0fd3e5a30d515b229aa0b0795830e5a1190a921f6de88523b3335d50123',
                 'ev_dc4357b3394b77bcdc9efaad99e7dd25ae2d7f82baf780a20c23c18158055d8c',
                 'ev_06371af56602bf81038fb409467b565b2d18f49951eb4dd12598bc55ac0ea71c' ] };
-        return getters.map((method, index) => ({ method, installed: false,
-            returns: new Set(sites.filter(site => site.getter === index).map(site =>
-                module.base.add(site.call + 5).toString())) }));
+        return [{ method: getter, installed: false,
+            returns: new Set(sites.map(site => module.base.add(site.call + 5).toString())) }];
     }
     function prepareAbility() {
-        const gate = typedMethod(common.livingClass, 'KDGEABNFKJI', [], 'System.Boolean', false, 0x777b20);
+        const gate = typedMethod(common.livingClass, 'KDGEABNFKJI', [], 'System.Boolean', false, 0x7a65c0);
         const callers = [
-            typedMethod(playerClass, 'GCAEONBDGJF', ['System.Single', 'System.Single'], 'System.Boolean', false, 0x155f480),
-            typedMethod(playerClass, 'PBABCOMDDPO', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false, 0x1570520),
-            typedMethod(playerClass, 'JBGFEHMHPGP', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false, 0x1564890)
+            typedMethod(playerClass, 'GCAEONBDGJF', ['System.Single', 'System.Single'], 'System.Boolean', false, 0x1931970),
+            typedMethod(playerClass, 'PBABCOMDDPO', ['System.Single', 'System.Single', 'ELAINNINAMO'], 'System.Boolean', false, 0x193e9b0)
         ];
-        // REA decoded these five calls and their following TEST AL instructions.
-        // Only the Silenced getter result changes. A caller's Boolean may mean
-        // "handled" rather than success, and is never replaced by this module.
+        // Each call is followed by a TEST AL and a conditional branch in
+        // the local ability path. The caller's result is never replaced.
         const sites = [
-            { call: 0x155f54c, bytes: 'e8cf8521ff84c00f858c01000033d2488bcbe8bdaa' },
-            { call: 0x1570a32, bytes: 'e8e97020ff84c00f85eb10000033d2488bcfe877d4' },
-            { call: 0x1570c3e, bytes: 'e8dd6e20ff84c00f854b050000488975e0488b15ca' },
-            { call: 0x1564db1, bytes: 'e86a2d21ff84c00f856a11000033d2488bcfe8f890' },
-            { call: 0x1564f99, bytes: 'e8822b21ff84c00f8533050000488975f0488b155f' }
+            { call: 0x1931a3c, bytes: 'e87f4be7fe84c00f858c01000033d2488bcbe87d71' },
+            { call: 0x193eec6, bytes: 'e8f576e6fe84c00f8597140000488b87b006000048' },
+            { call: 0x193f123, bytes: 'e89874e6fe84c00f85db060000488975f0488b15e5' }
         ];
-        const guards = [verifyBytes(0x777b20, '40534883ec20803d2e69bd0300488bd9'),
-            verifyBytes(0x155f480, '40534883ec60803dd969df0200488bd9'),
-            verifyBytes(0x1570520, '488bc444894820f30f115018f30f1148'),
-            verifyBytes(0x1564890, '488bc444894820f30f115018f30f1148'),
+        const guards = [verifyBytes(0x7a65c0, '40534883ec20803d5fe0cf0300488bd9'),
+            verifyBytes(0x1931970, '40534883ec60803dd2c8b70200488bd9'),
+            verifyBytes(0x193e9b0, '488bc444894820f30f115018f30f1148'),
             ...sites.map(site => verifyBytes(site.call, site.bytes))];
         bindings.silenced_protection = { gate, callers, code_guards: guards,
             return_address_rvas: sites.map(site => '0x' + (site.call + 5).toString(16)),

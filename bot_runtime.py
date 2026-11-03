@@ -33,7 +33,8 @@ from windows_nexus import (NexusInputBlocked, NexusInputError, WindowsNexus,
                            Win32InputBackend, normalize_nexus_key)
 
 ROOT = APP_ROOT
-SUPPORTED_GAMEASSEMBLY_SHA256 = "c4f87cde09d713be23c96a5c17774bdbd65e36cd4a4c6fb017759b24daea01cb"
+SUPPORTED_GAMEASSEMBLY_SHA256 = "e213023087e8a09f03a947394fa02bf346c156c30579cdb5562e7d21d4563519"
+PREVIOUS_GAMEASSEMBLY_SHA256 = "c4f87cde09d713be23c96a5c17774bdbd65e36cd4a4c6fb017759b24daea01cb"
 UNKNOWN_FRAME = HealthFrame(None, None, None, None, None, None)
 MAX_AGE_MS = 250
 POLL_SECONDS = 0.05
@@ -70,7 +71,9 @@ def config_from_mapping(data: object, threshold_percent: float | None = None) ->
     if not isinstance(names, list):
         raise ValueError("excluded_maps debe ser una lista de nombres")
     pin = data.get("gameassembly_sha256", SUPPORTED_GAMEASSEMBLY_SHA256)
-    if not isinstance(pin, str) or pin.lower() != SUPPORTED_GAMEASSEMBLY_SHA256:
+    # Portable updates preserve the old user config. Its pin is only a migration input.
+    if not isinstance(pin, str) or pin.lower() not in (
+            SUPPORTED_GAMEASSEMBLY_SHA256, PREVIOUS_GAMEASSEMBLY_SHA256):
         raise ValueError("La configuración no corresponde a esta versión de MiRealmBot. Usa la configuración incluida en su descarga.")
     use_state_filters = data.get("use_state_filters", False)
     if not isinstance(use_state_filters, bool):
@@ -89,7 +92,7 @@ def config_from_mapping(data: object, threshold_percent: float | None = None) ->
     # Validate now, before saving or starting a worker. Retain the supplied
     # fraction; AutoNexus owns its float32 representation when used.
     Controller(AutoNexus(threshold, use_state_filters=use_state_filters), names)
-    return RuntimeConfig(threshold, key, tuple(names), pin.lower(), use_state_filters,
+    return RuntimeConfig(threshold, key, tuple(names), SUPPORTED_GAMEASSEMBLY_SHA256, use_state_filters,
                          prediction_enabled, autoaim, detect_game_keys, autonexus_enabled, debuffs)
 
 

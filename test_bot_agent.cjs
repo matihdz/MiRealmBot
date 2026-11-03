@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const main = fs.readFileSync(path.join(__dirname, 'bot_agent.js'), 'utf8');
+const main = fs.readFileSync(path.join(__dirname, 'bot_agent.js'), 'utf8').replace(/\r\n/g, '\n');
 const aim = fs.readFileSync(path.join(__dirname, 'autoaim_agent.js'), 'utf8');
 const debuffs = fs.readFileSync(path.join(__dirname, 'debuffs_agent.js'), 'utf8');
 function selectedBody(begin, end) {
@@ -126,8 +126,8 @@ function harness() {
                 effect === 'both' ? ['confuse', 'quiet'] : [effect];
             const word = (effects.includes('confuse') ? 0x400 : 0) |
                 (effects.includes('blind') ? 0x80 : 0) | (effects.includes('quiet') ? 2 : 0);
-            for (const [address, value] of [[0x2048, 0x1000], [0x1564, 0], [0x1744, 0],
-                [0x1740, 0], [0x1250, 0x4000], [0x4018, 3],
+            for (const [address, value] of [[0x2048, 0x1000], [0x1564, 0], [0x174c, 0],
+                [0x1748, 0], [0x1250, 0x4000], [0x4018, 3],
                 [0x4020, word], [0x4024, effects.includes('silenced') ? 0x10000 : 0]]) env.memory.set(address, value);
             activeAssociation = { player, world, identity: 'player-world', map_id: 'map-1',
                 gui_seen_at: env.now, map_name: 'Nexus', hp: 840, max_hp: 840 };
@@ -334,7 +334,7 @@ test('Stop receipts preserve both production condition owners after releasing th
         assert.equal(observation.revision, 2);
     }
 });
-test('Stop receipts retain all three condition interruptions after releasing both visual getters and movement', () => {
+test('Stop receipts retain all three condition interruptions after releasing the visual getter and movement', () => {
     const trial = harness(), options = defaults();
     options.autoaim.enabled = true;
     trial.rpc.configure(options);
@@ -343,10 +343,10 @@ test('Stop receipts retain all three condition interruptions after releasing bot
         assert.equal(initial[effect + '_observation'].last_episode.state, 'active', effect);
     }
     assert.equal(initial.blind_observation.current.visual_blocks, 0);
-    assert.equal(trial.inspect().hooks, 4); // Aim, Confuse, and two Blind getters.
+    assert.equal(trial.inspect().hooks, 3); // Aim, Confuse, and Blind.
     const reads = trial.env.targetReads;
     const receipt = trial.rpc.stop();
-    assert.equal(receipt.hooks_detached, 4);
+    assert.equal(receipt.hooks_detached, 3);
     assert.equal(trial.inspect().hooks, 0);
     assert.equal(trial.env.targetReads, reads);
     for (const effect of ['quiet', 'confuse', 'blind']) {
@@ -369,10 +369,10 @@ test('Stop receipts preserve four condition intervals after releasing the experi
     assert.equal(initial.silenced_observation.current.condition_word1, 0x10000);
     assert.equal(initial.silenced_observation.current.ability_gate_bypasses, 0);
     assert.equal(initial.server_acceptance_verified, false);
-    assert.equal(trial.inspect().hooks, 5); // Aim, Confuse, two Blind getters, Silenced.
+    assert.equal(trial.inspect().hooks, 4); // Aim, Confuse, Blind, and Silenced.
     const reads = trial.env.targetReads;
     const receipt = trial.rpc.stop();
-    assert.equal(receipt.hooks_detached, 5);
+    assert.equal(receipt.hooks_detached, 4);
     assert.equal(trial.inspect().hooks, 0);
     assert.equal(trial.env.targetReads, reads);
     for (const effect of ['quiet', 'confuse', 'blind', 'silenced']) {

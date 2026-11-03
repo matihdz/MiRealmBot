@@ -12,7 +12,7 @@ function createGameBindingsBridge(context) {
     const settingsField = instanceField(inputClass, 'FMALFKOBLOI',
         'DecaGames.RotMG.UI.Managers.SettingsManager', 0x58);
     const getter = typedMethod(settingsClass, 'GetKeyCode', ['KHOOEAMAAIM'],
-        'UnityEngine.KeyCode', false, 0x1cdd310);
+        'UnityEngine.KeyCode', false, 0x10f70b0);
     let latest = {};
     let identity = null;
     let error = null;
