@@ -355,6 +355,22 @@ class WindowsTransactionTests(unittest.TestCase):
         self.assertEqual((backup / "autonexus.json").read_text(), '{"threshold":0.55,"personal":true}')
         self.assertEqual((backup / "mirealmbot.example.json").read_text(), "old public template")
 
+    def test_preserves_personal_directory_when_staging_exceeds_max_path(self):
+        prefix = Path("analysis") / ("a" * 70) / ("b" * 70)
+        filename_length = 245 - len(str(self.app / prefix)) - 1
+        relative = prefix / ("c" * filename_length)
+        original = self.app / relative
+        self.assertLess(len(str(original)), 260)
+        self.assertGreater(len(str(self.staged / relative)), 260)
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b"personal artifact")
+
+        code, report = self.run_worker()
+
+        self.assertEqual(code, 0, report)
+        self.assertEqual(original.read_bytes(), b"personal artifact")
+        self.assertEqual((Path(report["backup_root"]) / relative).read_bytes(), b"personal artifact")
+
     def test_actual_031_worker_upgrade_then_first_launch_migrates_legacy_bytes_once(self):
         # A 0.3.1 installation has only the older configuration name. The new
         # release must not preseed canonical settings and hide the user's data.

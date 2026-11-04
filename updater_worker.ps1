@@ -56,7 +56,16 @@ try {
             if ($personalConfigs -notcontains $item.Name -and (Test-Path -LiteralPath $destination)) {
                 throw ('A personal file conflicts with the new release: ' + $item.Name)
             }
-            Copy-Item -LiteralPath $item.FullName -Destination $destination -Recurse -Force
+            if ($item.PSIsContainer) {
+                # The staging prefix can push otherwise valid paths past MAX_PATH.
+                $robocopy = [IO.Path]::Combine($env:SystemRoot, 'System32', 'robocopy.exe')
+                & $robocopy $item.FullName $destination /E /COPY:DAT /DCOPY:DAT /SL /SJ /R:0 /W:0 | Out-Null
+                if ($LASTEXITCODE -ge 8) {
+                    throw ("Could not preserve {0} (Robocopy exit {1})." -f $item.Name, $LASTEXITCODE)
+                }
+            } else {
+                Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+            }
         }
     }
     [IO.Directory]::Move($appRoot, $backup)
